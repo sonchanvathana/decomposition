@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("📊 Decomposition Tree (Delay/KPI/PowerBI/Any Scenario)")
+st.title("📊 Decomposition Tree (Delay/KPI/Any Scenario)")
 
 def convert_pandas_to_json_serializable(obj):
     """Convert pandas objects to JSON serializable format"""
@@ -245,6 +245,11 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
                 node.pop("children")
             parent["children"].append(node)
     root_nodes = []
+    
+    # Safety check for empty hierarchy
+    if not hierarchy:
+        return []
+    
     col = hierarchy[0]
     for val, group in df.groupby(col):
         val_str = "No Data" if pd.isna(val) else str(val)
@@ -357,11 +362,13 @@ if uploaded_file:
     # Combine all available columns
     available_cols = all_cols + time_columns
     
-    default_hierarchy = [c for c in ["Project", "Status", "Delay_Reason"] if c in available_cols]
+    # Use first 6 columns as default, or all columns if less than 6
+    default_hierarchy = available_cols[:min(6, len(available_cols))]
     hierarchy = st.sidebar.multiselect(
         "Select hierarchy columns (ordered)",
         available_cols,
-        default=default_hierarchy if default_hierarchy else available_cols[:3]
+        default=default_hierarchy,
+        help="⚠️ **Required:** Select at least one column. The order determines the tree structure - first column = root level, second = second level, etc."
     )
     tooltip_cols = st.sidebar.multiselect("Tooltip columns (aggregated for each node)", all_cols, default=[])
     
@@ -407,6 +414,21 @@ if uploaded_file:
 
     df = kpi_panel(df, time_comparison)
 
+    # Check if hierarchy is empty and provide user guidance
+    if not hierarchy:
+        st.error("⚠️ **No columns selected for hierarchy!**")
+        st.info("""
+        **Please select at least one column** from the "Select hierarchy columns" dropdown in the sidebar.
+        
+        💡 **Tip:** The hierarchy determines how your data will be organized in the tree structure.
+        - First column = Root level
+        - Second column = Second level
+        - And so on...
+        
+        **Recommended:** Start with your main categories (e.g., Project, Status, Region, etc.)
+        """)
+        st.stop()
+    
     # Update hierarchy to use time-based status columns if needed
     updated_hierarchy = []
     for col in hierarchy:
@@ -1581,7 +1603,7 @@ if uploaded_file:
     </body>
     </html>
     """
-    st.header("🎯 Interactive Decomposition Tree (Ultimate Power BI Style)")
+    st.header("🎯 Interactive Decomposition Tree")
     st.markdown(f"*Node color ({time_comparison}): 🔵 Early, 🟢 On-Time, 🔴 Delayed, ⚪ Pending*")
     st.info("💡 **Right-click on any node** to download data, view details, or export the subtree structure!")
     
