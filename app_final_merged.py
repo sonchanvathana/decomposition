@@ -330,20 +330,51 @@ if uploaded_file:
     all_cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include='number').columns.tolist()
     
-    # Time comparison fixed to Day for current workflow
-    time_comparison = "Day"
+    # Time comparison options (define this first)
+    st.sidebar.header("📅 Time Comparison Options")
+    time_comparison = st.sidebar.selectbox(
+        "Compare by:",
+        ["Day", "Week (Monday start)", "Month"],
+        help="Choose how to group and compare your data for better insights"
+    )
     
-    # Add time-based columns to the dataframe (kept for future, but only Day is used)
+    # Add time-based columns to the dataframe
     if 'Planned_OnAir_Date' in df.columns:
         df['Planned_OnAir_Date'] = pd.to_datetime(df['Planned_OnAir_Date'], errors='coerce')
+        if time_comparison == "Week (Monday start)":
+            df['Planned_Week'] = df['Planned_OnAir_Date'].dt.strftime('%Y-W%U')
+            df['Planned_Week_Label'] = df['Planned_OnAir_Date'].dt.strftime('%Y-W%U (%b %d)')
+        elif time_comparison == "Month":
+            df['Planned_Month'] = df['Planned_OnAir_Date'].dt.strftime('%Y-%m')
+            df['Planned_Month_Label'] = df['Planned_OnAir_Date'].dt.strftime('%Y-%m (%B %Y)')
     
     if 'Actual_OnAir_Date' in df.columns:
         df['Actual_OnAir_Date'] = pd.to_datetime(df['Actual_OnAir_Date'], errors='coerce')
+        if time_comparison == "Week (Monday start)":
+            df['Actual_Week'] = df['Actual_OnAir_Date'].dt.strftime('%Y-W%U')
+            df['Actual_Week_Label'] = df['Actual_OnAir_Date'].dt.strftime('%Y-W%U (%b %d)')
+        elif time_comparison == "Month":
+            df['Actual_Month'] = df['Actual_OnAir_Date'].dt.strftime('%Y-%m')
+            df['Actual_Month_Label'] = df['Actual_OnAir_Date'].dt.strftime('%Y-%m (%B %Y)')
     
     st.sidebar.header("🪜 Hierarchy Configuration")
     
-    # Time columns disabled for now (Day-only mode)
+    # Add time-based columns to available options
     time_columns = []
+    if time_comparison == "Week (Monday start)":
+        if 'Planned_Week_Label' in df.columns:
+            time_columns.append('Planned_Week_Label')
+        if 'Actual_Week_Label' in df.columns:
+            time_columns.append('Actual_Week_Label')
+        if 'Week_Status' in df.columns:
+            time_columns.append('Week_Status')
+    elif time_comparison == "Month":
+        if 'Planned_Month_Label' in df.columns:
+            time_columns.append('Planned_Month_Label')
+        if 'Actual_Month_Label' in df.columns:
+            time_columns.append('Actual_Month_Label')
+        if 'Month_Status' in df.columns:
+            time_columns.append('Month_Status')
     
     # Combine all available columns
     available_cols = all_cols + time_columns
@@ -377,13 +408,6 @@ if uploaded_file:
         help="Adjust the size of all nodes in the tree"
     )
     
-    # Bottleneck base color for node intensity scale
-    bottleneck_base_color = st.sidebar.color_picker(
-        "Bottleneck Base Color:",
-        value="#2563EB",
-        help="Base hue for node color intensity (darker = higher share)"
-    )
-    
     # Connection line customization
     st.sidebar.header("🔗 Connection Line Settings")
     line_width = st.sidebar.slider(
@@ -396,7 +420,7 @@ if uploaded_file:
     
     line_color = st.sidebar.color_picker(
         "Line Color:",
-        value="#94A3B8",
+        value="#9CA3AF",
         help="Choose the color for connection lines"
     )
     
@@ -426,93 +450,34 @@ if uploaded_file:
         help="Choose the font weight for labels"
     )
     
-    # Layout spacing to reduce overlaps
-    st.sidebar.header("📐 Layout Spacing")
-    vertical_spacing = st.sidebar.slider(
-        "Vertical Spacing (dx)",
-        min_value=28,
-        max_value=120,
-        value=52,
-        help="Increase if sibling nodes overlap vertically"
-    )
-    horizontal_spacing = st.sidebar.slider(
-        "Horizontal Spacing (dy)",
-        min_value=140,
-        max_value=360,
-        value=220,
-        help="Increase if labels crowd each other horizontally"
-    )
+    # Status color customization
+    use_custom_colors = st.sidebar.checkbox("Customize status colors", False)
     
-    st.sidebar.header("🔤 Label Options")
-    label_position = st.sidebar.selectbox(
-        "Label Position",
-        ["Right of node", "Above node"],
-        index=0,
-        help="Place labels to the right (best for dense trees) or above"
-    )
-    label_max_width = st.sidebar.slider(
-        "Label Max Width (px)",
-        min_value=80,
-        max_value=320,
-        value=180,
-        help="Long labels will wrap to multiple lines"
-    )
-    
-    # Export quality controls
-    st.sidebar.header("🖨️ Export Quality")
-    png_export_scale = st.sidebar.slider(
-        "PNG export scale (x)",
-        min_value=1,
-        max_value=6,
-        value=4,
-        help="Higher scale = sharper PNG for PPT (larger file size)"
-    )
-    svg_non_scaling_stroke = st.sidebar.checkbox(
-        "SVG non-scaling strokes (crisper lines)",
-        True
-    )
-    svg_rendering_hints = st.sidebar.checkbox(
-        "SVG rendering hints (optimize legibility)",
-        True
-    )
-    
-    # Sorting & manual re-order options
-    sort_mode = st.sidebar.selectbox(
-        "Sort nodes by",
-        [
-            "None",
-            "Value (High → Low)",
-            "Value (Low → High)",
-            "Percentage (High → Low)",
-            "Percentage (Low → High)",
-            "Name (A → Z)",
-            "Name (Z → A)"
-        ],
-        index=0,
-        help="Automatic sorting of sibling nodes."
-    )
-    manual_reorder = st.sidebar.checkbox(
-        "Enable manual re-order (drag siblings)",
-        False,
-        help="Drag nodes at the same level to change their order. Disables auto sort while active."
-    )
-    
-    # Map sort mode for JavaScript
-    sort_mode_map = {
-        "None": "none",
-        "Value (High → Low)": "value_desc",
-        "Value (Low → High)": "value_asc",
-        "Percentage (High → Low)": "percentage_desc",
-        "Percentage (Low → High)": "percentage_asc",
-        "Name (A → Z)": "name_asc",
-        "Name (Z → A)": "name_desc",
-    }
-    sort_mode_js = sort_mode_map.get(sort_mode, "none")
-    manual_reorder_js = "true" if manual_reorder else "false"
-    svg_non_scaling_stroke_js = "true" if svg_non_scaling_stroke else "false"
-    svg_rendering_hints_js = "true" if svg_rendering_hints else "false"
-    
-    # Node color is derived from bottleneck percentage within the visualization (no status-based colors)
+    if use_custom_colors:
+        early_color = st.sidebar.color_picker("Early Color", "#3B82F6", help="Color for Early On-Air status")
+        ontime_color = st.sidebar.color_picker("On-Time Color", "#10B981", help="Color for On-Time On-Air status")
+        delayed_color = st.sidebar.color_picker("Delayed Color", "#EF4444", help="Color for Delayed On-Air status")
+        pending_color = st.sidebar.color_picker("Pending Color", "#6B7280", help="Color for Pending On-Air status")
+        
+        # Update the node_color function with custom colors
+        def node_color(status):
+            return {
+                'Early': early_color,
+                'Delayed': delayed_color,
+                'On-Time': ontime_color,
+                'Pending': pending_color,
+                'No Data': '#9CA3AF'
+            }.get(str(status), early_color)
+    else:
+        # Default colors
+        def node_color(status):
+            return {
+                'Early': '#3B82F6',      # Blue for early completion
+                'Delayed': '#EF4444',    # Red for delayed
+                'On-Time': '#10B981',    # Green for on-time
+                'Pending': '#6B7280',    # Gray for pending
+                'No Data': '#9CA3AF'     # Light gray for no data
+            }.get(str(status), '#3B82F6')
     
     agg_method = st.sidebar.selectbox("Aggregation method", ["Count", "Sum", "Average"])
     value_col = None
@@ -541,8 +506,15 @@ if uploaded_file:
         """)
         st.stop()
     
-    # Day-only mode, keep hierarchy as selected
-    updated_hierarchy = list(hierarchy)
+    # Update hierarchy to use time-based status columns if needed
+    updated_hierarchy = []
+    for col in hierarchy:
+        if col == "Status" and time_comparison == "Week (Monday start)" and 'Week_Status' in df.columns:
+            updated_hierarchy.append("Week_Status")
+        elif col == "Status" and time_comparison == "Month" and 'Month_Status' in df.columns:
+            updated_hierarchy.append("Month_Status")
+        else:
+            updated_hierarchy.append(col)
     
     tree_data = build_tree(df, updated_hierarchy, value_col, tooltip_cols, time_comparison)
     if tree_data and len(tree_data) > 0:
@@ -599,29 +571,13 @@ if uploaded_file:
         const fontSize = {font_size};
         const fontWeight = "{font_weight}";
         
-        // Export quality configuration
-        const exportScale = {png_export_scale};
-        const svgNonScalingStroke = {svg_non_scaling_stroke_js};
-        const svgRenderingHints = {svg_rendering_hints_js};
-
-        // Bottleneck color configuration (darker = higher percentage share)
-        const baseColor = "{bottleneck_base_color}";
-        function getNodeFill(d) {{
-          const base = d3.color(baseColor) || d3.color('#2563EB');
-          const hsl = d3.hsl(base);
-          const pct = Math.max(0, Math.min(100, d.data.percentage || 0)) / 100;
-          const minL = 0.35, maxL = 0.82; // lightness range
-          hsl.l = maxL - (maxL - minL) * pct;
-          return hsl.formatHex();
-        }}
-
         // Node shape functions
         function createNodeShape(selection, size) {{
           switch(nodeShape) {{
             case "Circle":
               selection.append("circle")
                 .attr("r", size)
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
@@ -631,7 +587,7 @@ if uploaded_file:
                 .attr("height", size * 2)
                 .attr("x", -size)
                 .attr("y", -size)
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3)
                 .attr("rx", 2);
@@ -642,7 +598,7 @@ if uploaded_file:
                   const s = size;
                   return `0,-${{s}} ${{s}},0 0,${{s}} -${{s}},0`;
                 }})
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
@@ -652,7 +608,7 @@ if uploaded_file:
                   const s = size;
                   return `0,-${{s}} -${{s}},${{s}} ${{s}},${{s}}`;
                 }})
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
@@ -668,7 +624,7 @@ if uploaded_file:
                   }}
                   return `M ${{points.join(' L ')}} Z`;
                 }})
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
@@ -683,7 +639,7 @@ if uploaded_file:
                   }}
                   return points.join(' ');
                 }})
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
@@ -698,7 +654,7 @@ if uploaded_file:
                     .attr("y", -s)
                     .attr("width", 4)
                     .attr("height", s * 2)
-                    .attr("fill", d => getNodeFill(d))
+                    .attr("fill", d.data.color || "#CBD5E1")
                     .attr("stroke", "#fff")
                     .attr("stroke-width", 3);
                   // Horizontal line
@@ -707,7 +663,7 @@ if uploaded_file:
                     .attr("y", -2)
                     .attr("width", s * 2)
                     .attr("height", 4)
-                    .attr("fill", d => getNodeFill(d))
+                    .attr("fill", d.data.color || "#CBD5E1")
                     .attr("stroke", "#fff")
                     .attr("stroke-width", 3);
                 }});
@@ -723,7 +679,7 @@ if uploaded_file:
                     .attr("y", -s)
                     .attr("width", 4)
                     .attr("height", s * 2)
-                    .attr("fill", d => getNodeFill(d))
+                    .attr("fill", d.data.color || "#CBD5E1")
                     .attr("stroke", "#fff")
                     .attr("stroke-width", 3);
                   // Horizontal line
@@ -732,7 +688,7 @@ if uploaded_file:
                     .attr("y", -2)
                     .attr("width", s * 2)
                     .attr("height", 4)
-                    .attr("fill", d => getNodeFill(d))
+                    .attr("fill", d.data.color || "#CBD5E1")
                     .attr("stroke", "#fff")
                     .attr("stroke-width", 3);
                 }});
@@ -740,7 +696,7 @@ if uploaded_file:
             default:
               selection.append("circle")
                 .attr("r", size)
-                .attr("fill", d => getNodeFill(d))
+                .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
           }}
@@ -865,25 +821,10 @@ if uploaded_file:
     </div>
     <script>
     const data = {tree_data_json};
-    const width = 1100, height = 800, dx = {vertical_spacing}, dy = {horizontal_spacing};
+    const width = 1100, height = 800, dx = 44, dy = 220;
     const tree = d3.tree().nodeSize([dx, dy]);
     const diagonal = d3.linkHorizontal().x(d => d.y).y(d => d.x);
     const root = d3.hierarchy(data);
-    
-    // Stable key generator for nodes based on full ancestry path
-    function getNodeKey(d) {{
-      if (!d) return '';
-      if (d.__key) return d.__key;
-      const parts = d.ancestors().reverse().map(n => (n.data && n.data.name) || 'Root');
-      d.__key = parts.join(' > ');
-      return d.__key;
-    }}
-    // Precompute stable keys for all nodes
-    root.each(d => {{ getNodeKey(d); }});
-    
-    // Sorting configuration from Streamlit
-    const sortMode = "{sort_mode_js}";
-    const manualReorderEnabled = {manual_reorder_js};
     
     // Global variables for context menu
     let selectedNode = null;
@@ -1024,28 +965,37 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
       
-      // Create high-resolution temporary SVG for rendering (scaled)
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
+      
+      // Create high-resolution canvas
+      const scale = 3; // 3x resolution for crisp images
+      const canvas = document.createElement('canvas');
+      canvas.width = treeWidth * scale;
+      canvas.height = treeHeight * scale;
+      const ctx = canvas.getContext('2d');
+      
+      // Clear canvas (transparent background)
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth * scale)
-        .attr('height', treeHeight * scale)
-        .attr('viewBox', `0 0 ${{treeWidth * scale}} ${{treeHeight * scale}}`)
-        .attr('xmlns', 'http://www.w3.org/2000/svg');
-      if (svgRenderingHints) {{
-        tempSvg.append('style').text(`*{{shape-rendering:geometricPrecision; text-rendering:optimizeLegibility; image-rendering:optimizeQuality}}`);
-      }}
+        .attr('width', treeWidth)
+        .attr('height', treeHeight);
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{(-minY + margin) * scale}}, ${{(-minX + margin) * scale}}) scale(${{scale}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the already calculated export tree
       const tempLinks = exportRoot.links();
@@ -1080,24 +1030,6 @@ if uploaded_file:
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
-
-      // Compute tight bounds including text and adjust SVG/canvas sizes
-      const bbox = tempG.node().getBBox();
-      const contentWidth = bbox.width;
-      const contentHeight = bbox.height;
-      const scale = exportScale; // user-controlled scale for crisp images
-      const finalPixelWidth = Math.ceil((contentWidth + margin * 2) * scale);
-      const finalPixelHeight = Math.ceil((contentHeight + margin * 2) * scale);
-      tempG.attr('transform', `translate(${{(-bbox.x + margin) * scale}}, ${{(-bbox.y + margin) * scale}}) scale(${{scale}})`);
-      tempSvg.attr('width', finalPixelWidth).attr('height', finalPixelHeight).attr('viewBox', `0 0 ${{finalPixelWidth}} ${{finalPixelHeight}}`);
-
-      // Create high-resolution canvas after measuring
-      const canvas = document.createElement('canvas');
-      canvas.width = finalPixelWidth;
-      canvas.height = finalPixelHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = true;
-      if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
       
       // Convert SVG to data URL and download
       const svgData = new XMLSerializer().serializeToString(tempSvg.node());
@@ -1133,29 +1065,39 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
       
-      // Create high-resolution temporary SVG for rendering (scaled)
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
+      
+      // Create high-resolution canvas with white background
+      const scale = 3; // 3x resolution for crisp images
+      const canvas = document.createElement('canvas');
+      canvas.width = treeWidth * scale;
+      canvas.height = treeHeight * scale;
+      const ctx = canvas.getContext('2d');
+      
+      // Set white background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth * scale)
-        .attr('height', treeHeight * scale)
-        .attr('viewBox', `0 0 ${{treeWidth * scale}} ${{treeHeight * scale}}`)
-        .attr('xmlns', 'http://www.w3.org/2000/svg')
+        .attr('width', treeWidth)
+        .attr('height', treeHeight)
         .style('background', '#ffffff');
-      if (svgRenderingHints) {{
-        tempSvg.append('style').text(`*{{shape-rendering:geometricPrecision; text-rendering:optimizeLegibility; image-rendering:optimizeQuality}}`);
-      }}
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{(-minY + margin) * scale}}, ${{(-minX + margin) * scale}}) scale(${{scale}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the already calculated export tree
       const tempLinks = exportRoot.links();
@@ -1190,26 +1132,6 @@ if uploaded_file:
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
-
-      // Compute tight bounds including text and adjust SVG/canvas sizes
-      const bbox = tempG.node().getBBox();
-      const contentWidth = bbox.width;
-      const contentHeight = bbox.height;
-      const scale = exportScale; // user-controlled scale for crisp images
-      const finalPixelWidth = Math.ceil((contentWidth + margin * 2) * scale);
-      const finalPixelHeight = Math.ceil((contentHeight + margin * 2) * scale);
-      tempG.attr('transform', `translate(${{(-bbox.x + margin) * scale}}, ${{(-bbox.y + margin) * scale}}) scale(${{scale}})`);
-      tempSvg.attr('width', finalPixelWidth).attr('height', finalPixelHeight).attr('viewBox', `0 0 ${{finalPixelWidth}} ${{finalPixelHeight}}`);
-
-      // Create high-resolution canvas after measuring (white background)
-      const canvas = document.createElement('canvas');
-      canvas.width = finalPixelWidth;
-      canvas.height = finalPixelHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = true;
-      if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
       
       // Convert SVG to data URL and download
       const svgData = new XMLSerializer().serializeToString(tempSvg.node());
@@ -1245,28 +1167,28 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
+      
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
       
       // Create SVG with transparent background
       const svg = d3.create('svg')
         .attr('width', treeWidth)
         .attr('height', treeHeight)
-        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`)
         .attr('xmlns', 'http://www.w3.org/2000/svg');
-      if (svgRenderingHints) {{
-        svg.append('style').text(`*{{shape-rendering:geometricPrecision; text-rendering:optimizeLegibility; image-rendering:optimizeQuality}}`);
-      }}
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + margin}}, ${{-minX + margin}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the already calculated export tree
       const links = exportRoot.links();
@@ -1277,8 +1199,7 @@ if uploaded_file:
         .attr('fill', 'none')
         .attr('stroke', lineColor)
         .attr('stroke-width', lineWidth)
-        .attr('stroke-opacity', lineOpacity)
-        .attr('vector-effect', svgNonScalingStroke ? 'non-scaling-stroke' : null);
+        .attr('stroke-opacity', lineOpacity);
       
       // Render nodes
       const tempNodes = exportRoot.descendants();
@@ -1291,9 +1212,6 @@ if uploaded_file:
       nodeGroups.each(function(d) {{
         createNodeShape(d3.select(this), nodeSize);
       }});
-      if (svgNonScalingStroke) {{
-        nodeGroups.selectAll('circle,rect,polygon,path').attr('vector-effect', 'non-scaling-stroke');
-      }}
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
@@ -1305,10 +1223,6 @@ if uploaded_file:
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
-      
-      // Compute tight bounds and set viewBox so content is centered and tightly fit
-      const bbox = g.node().getBBox();
-      svg.attr('viewBox', `${{bbox.x - margin}} ${{bbox.y - margin}} ${{bbox.width + 2*margin}} ${{bbox.height + 2*margin}}`);
       
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
@@ -1335,27 +1249,27 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
+      
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
       
       // Create SVG with white background
       const svg = d3.create('svg')
         .attr('width', treeWidth)
         .attr('height', treeHeight)
-        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`)
         .attr('xmlns', 'http://www.w3.org/2000/svg')
         .style('background', '#ffffff');
-      if (svgRenderingHints) {{
-        svg.append('style').text(`*{{shape-rendering:geometricPrecision; text-rendering:optimizeLegibility; image-rendering:optimizeQuality}}`);
-      }}
       
-      // Add white background rectangle (kept, viewBox will be adjusted later)
+      // Add white background rectangle
       svg.append('rect')
         .attr('width', '100%')
         .attr('height', '100%')
@@ -1363,7 +1277,7 @@ if uploaded_file:
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + margin}}, ${{-minX + margin}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the already calculated export tree
       const links = exportRoot.links();
@@ -1374,8 +1288,7 @@ if uploaded_file:
         .attr('fill', 'none')
         .attr('stroke', lineColor)
         .attr('stroke-width', lineWidth)
-        .attr('stroke-opacity', lineOpacity)
-        .attr('vector-effect', svgNonScalingStroke ? 'non-scaling-stroke' : null);
+        .attr('stroke-opacity', lineOpacity);
       
       // Render nodes
       const tempNodes = exportRoot.descendants();
@@ -1388,9 +1301,6 @@ if uploaded_file:
       nodeGroups.each(function(d) {{
         createNodeShape(d3.select(this), nodeSize);
       }});
-      if (svgNonScalingStroke) {{
-        nodeGroups.selectAll('circle,rect,polygon,path').attr('vector-effect', 'non-scaling-stroke');
-      }}
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
@@ -1402,10 +1312,6 @@ if uploaded_file:
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
-      
-      // Compute tight bounds and set viewBox to fit content + margin
-      const bbox = g.node().getBBox();
-      svg.attr('viewBox', `${{bbox.x - margin}} ${{bbox.y - margin}} ${{bbox.width + 2*margin}} ${{bbox.height + 2*margin}}`);
       
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
@@ -1430,38 +1336,37 @@ if uploaded_file:
       const nodes = currentRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
+      
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
       
       // Create high-resolution canvas
-      const scale = exportScale; // use configured scale for crisp images
+      const scale = 3; // 3x resolution for crisp images
       const canvas = document.createElement('canvas');
       canvas.width = treeWidth * scale;
       canvas.height = treeHeight * scale;
       const ctx = canvas.getContext('2d');
-      ctx.imageSmoothingEnabled = true;
-      if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high';
       
       // Clear canvas (transparent background)
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      // Create high-resolution temporary SVG for rendering
+      // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth * scale)
-        .attr('height', treeHeight * scale)
-        .attr('viewBox', `0 0 ${{treeWidth * scale}} ${{treeHeight * scale}}`)
-        .attr('xmlns', 'http://www.w3.org/2000/svg');
-      // Rendering hints skipped to simplify export markup
+        .attr('width', treeWidth)
+        .attr('height', treeHeight);
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{(-minY + margin) * scale}}, ${{(-minX + margin) * scale}}) scale(${{scale}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the current tree links
       const currentLinks = currentRoot.links();
@@ -1487,9 +1392,9 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')
-        .attr('x', 0)
-        .attr('text-anchor', 'middle')
+        .attr('dy', '-0.5em')  // Position text above the node
+        .attr('x', 0)           // Center align horizontally
+        .attr('text-anchor', 'middle')  // Center align the text
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
@@ -1527,25 +1432,28 @@ if uploaded_file:
       const nodes = currentRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with tight symmetric margins
+      // Calculate tree bounds with extra padding for text labels
       const minX = d3.min(nodes, d => d.x);
       const maxX = d3.max(nodes, d => d.x);
       const minY = d3.min(nodes, d => d.y);
       const maxY = d3.max(nodes, d => d.y);
-      const margin = 24;
-      const treeWidth = (maxY - minY) + margin * 2;
-      const treeHeight = (maxX - minX) + margin * 2;
+      
+      // Estimate text width for labels (approximate 15px per character + padding)
+      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
+      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
+      
+      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
+      const treeHeight = maxX - minX + 400; // Increased padding
       
       // Create SVG with transparent background
       const svg = d3.create('svg')
         .attr('width', treeWidth)
         .attr('height', treeHeight)
-        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`)
         .attr('xmlns', 'http://www.w3.org/2000/svg');
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + margin}}, ${{-minX + margin}})`);
+        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
       
       // Use the current tree links
       const links = currentRoot.links();
@@ -1571,18 +1479,14 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')
-        .attr('x', 0)
-        .attr('text-anchor', 'middle')
+        .attr('dy', '-0.5em')  // Position text above the node
+        .attr('x', 0)           // Center align horizontally
+        .attr('text-anchor', 'middle')  // Center align the text
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
-      
-      // Compute tight bounds and set viewBox to fit content + margin
-      const bbox = g.node().getBBox();
-      svg.attr('viewBox', `${{bbox.x - margin}} ${{bbox.y - margin}} ${{bbox.width + 2*margin}} ${{bbox.height + 2*margin}}`);
       
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
@@ -1779,66 +1683,13 @@ if uploaded_file:
     // Hide context menu when clicking elsewhere
     document.addEventListener('click', hideContextMenu);
     
-    function applySort(node) {{
-      if (!node || !node.children) return;
-      switch (sortMode) {{
-        case 'value_desc':
-          node.children.sort((a,b) => (b.data.value||0) - (a.data.value||0));
-          break;
-        case 'value_asc':
-          node.children.sort((a,b) => (a.data.value||0) - (b.data.value||0));
-          break;
-        case 'percentage_desc':
-          node.children.sort((a,b) => (b.data.percentage||0) - (a.data.percentage||0));
-          break;
-        case 'percentage_asc':
-          node.children.sort((a,b) => (a.data.percentage||0) - (b.data.percentage||0));
-          break;
-        case 'name_asc':
-          node.children.sort((a,b) => (a.data.name||'').localeCompare(b.data.name||''));
-          break;
-        case 'name_desc':
-          node.children.sort((a,b) => (b.data.name||'').localeCompare(a.data.name||''));
-          break;
-        default:
-          break;
-      }}
-      node.children.forEach(applySort);
-    }}
-
-    function wrapText(textSel, width) {{
-      textSel.each(function() {{
-        const text = d3.select(this);
-        const words = text.text().split(/\s+/).reverse();
-        let line = [], lineNumber = 0;
-        const lineHeight = 1.2; // ems
-        const y = text.attr('y');
-        const dyTxt = parseFloat(text.attr('dy')) || 0;
-        let tspan = text.text(null).append('tspan').attr('x', 0).attr('y', y).attr('dy', dyTxt + 'em');
-        let word;
-        while (word = words.pop()) {{
-          line.push(word);
-          tspan.text(line.join(' '));
-          if (tspan.node().getComputedTextLength() > width) {{
-            line.pop();
-            tspan.text(line.join(' '));
-            line = [word];
-            tspan = text.append('tspan').attr('x', 0).attr('y', y).attr('dy', ++lineNumber * lineHeight + dyTxt + 'em').text(word);
-          }}
-        }}
-      }});
-    }}
-
     function update(source) {{
-      if (!manualReorderEnabled && sortMode !== 'none') {{
-        applySort(root);
-      }}
       tree(root);
       const nodes = root.descendants();
       const links = root.links();
       
       // Update links
-      const link = gLink.selectAll("path").data(links, d => getNodeKey(d.target));
+      const link = gLink.selectAll("path").data(links, d => d.target.id || (d.target.id = Math.random()));
       link.enter().append("path")
         .attr("class", "link")
         .attr("d", diagonal)
@@ -1850,14 +1701,13 @@ if uploaded_file:
       link.exit().remove();
       
       // Update nodes
-      const node = gNode.selectAll("g").data(nodes, d => getNodeKey(d));
+      const node = gNode.selectAll("g").data(nodes, d => d.id || (d.id = Math.random()));
       
       // Enter new nodes
       const nodeEnter = node.enter().append("g")
         .attr("class", "node")
         .attr("transform", d => `translate(${{source.y0 || 0}},${{source.x0 || 0}})`)
         .on("click", (event, d) => {{
-          if (window.__draggingNode) return; // prevent toggle when dragging
           if (d._children) {{
             d.children = d.children ? null : d._children;
           }}
@@ -1875,98 +1725,23 @@ if uploaded_file:
         }})
         .on("mouseout", () => tooltip.transition().duration(400).style("opacity", 0));
       
-      // Add shapes to new nodes using the custom shape function and enable drag for manual reordering
+      // Add shapes to new nodes using the custom shape function
       nodeEnter.each(function(d) {{
         createNodeShape(d3.select(this), nodeSize);
       }});
       
-      if (manualReorderEnabled) {{
-        const drag = d3.drag()
-          .on('start', (event, d) => {{
-            window.__draggingNode = true;
-            d3.select(event.sourceEvent.target.closest('g.node')).raise();
-          }})
-          .on('drag', (event, d) => {{
-            // Follow pointer vertically for clearer feedback
-            const pointer = d3.pointer(event, g.node());
-            const pointerY = pointer[1];
-            const nodeEl = d3.select(event.sourceEvent.target.closest('g.node'));
-            nodeEl.attr('transform', `translate(${{d.y}},${{pointerY}})`);
-          }})
-          .on('end', (event, d) => {{
-            const parent = d.parent;
-            if (parent && parent.children) {{
-              // Determine new index using midpoints between sibling centers
-              const pointer = d3.pointer(event, g.node());
-              const pointerY = pointer[1];
-              const siblings = parent.children.slice().sort((a,b) => a.x - b.x);
-              const currentIndex = siblings.indexOf(d);
-              const centers = siblings.map(s => s.x);
-              let newIndex = centers.length - 1;
-              for (let i = 0; i < centers.length - 1; i++) {{
-                const mid = (centers[i] + centers[i+1]) / 2;
-                if (pointerY < mid) {{ newIndex = i; break; }}
-              }}
-              newIndex = Math.max(0, Math.min(newIndex, siblings.length - 1));
-              if (newIndex !== currentIndex) {{
-                parent.children.splice(currentIndex, 1);
-                parent.children.splice(newIndex, 0, d);
-                // Keep hidden children order in sync if present
-                if (parent._children) {{
-                  const keyOrder = parent.children.map(getNodeKey);
-                  parent._children.sort((a,b) => keyOrder.indexOf(getNodeKey(a)) - keyOrder.indexOf(getNodeKey(b)));
-                }}
-              }}
-            }}
-            window.__draggingNode = false;
-            update(parent || d);
-          }});
-        nodeEnter.call(drag);
-      }}
-      
       // Add text to new nodes with clean styling and proper positioning
-      const label = nodeEnter.append("text")
+      nodeEnter.append("text")
+        .attr("dy", "-0.5em")  // Position text above the node
+        .attr("x", 0)           // Center align horizontally
+        .attr("text-anchor", "middle")  // Center align the text
         .attr("font-family", "Calibri, Arial, sans-serif")
         .attr("font-size", fontSize + "px")
         .attr("font-weight", fontWeight)
         .attr("fill", "#111")
-        .attr("pointer-events", "none")
+        .attr("pointer-events", "none")  // Prevent text from interfering with node clicks
         .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ""));
-
-      if ("{label_position}" === "Right of node") {{
-        label
-          .attr("dy", "0.32em")
-          .attr("x", nodeSize + 8)
-          .attr("text-anchor", "start")
-          .call(wrapText, {label_max_width});
-      }} else {{
-        label
-          .attr("dy", "-0.8em")
-          .attr("x", 0)
-          .attr("text-anchor", "middle")
-          .call(wrapText, {label_max_width});
-      }}
       
-      // After labels are created and wrapped, nudge labels to avoid vertical overlaps (right-of-node mode)
-      if ("{label_position}" === "Right of node") {{
-        const padding = 2;
-        const labelsArr = [];
-        gNode.selectAll('g.node text').each(function(nd) {{
-          const selElem = d3.select(this);
-          const bbox = this.getBBox();
-          labelsArr.push({{ sel: selElem, y: nd.x, height: bbox.height, baseY: parseFloat(selElem.attr('y')) || 0 }});
-        }});
-        labelsArr.sort((a,b) => a.y - b.y);
-        let lastBottom = -Infinity;
-        labelsArr.forEach(l => {{
-          const desiredTop = l.y - l.height / 2;
-          const newTop = Math.max(desiredTop, lastBottom + padding);
-          const shift = newTop - desiredTop;
-          l.sel.attr('y', l.baseY + shift);
-          lastBottom = newTop + l.height;
-        }});
-      }}
-
       // Update existing nodes
       node.merge(nodeEnter)
         .transition().duration(700)
@@ -2002,7 +1777,7 @@ if uploaded_file:
     </html>
     """
     st.header("🎯 Interactive Decomposition Tree")
-    st.markdown("*Color intensity shows bottlenecks: darker nodes represent higher share (%).*")
+    st.markdown(f"*Node color ({time_comparison}): 🔵 Early, 🟢 On-Time, 🔴 Delayed, ⚪ Pending*")
     st.info("💡 **Right-click on any node** to download data, view details, or export the subtree structure!")
     
     # Add export explanation
@@ -2023,7 +1798,25 @@ if uploaded_file:
         **Recommendation:** Use "Complete Tree" for official reports and "Current View" for focused presentations.
         """)
     
-    # Day-only mode: hide Week/Month debug sections
+    # Show status distribution for verification
+    if time_comparison == "Week (Monday start)" and 'Week_Status' in df.columns:
+        st.sidebar.write("**Week Status Distribution:**")
+        week_status_counts = df['Week_Status'].value_counts()
+        for status, count in week_status_counts.items():
+            st.sidebar.write(f"• {status}: {count}")
+        # Debug: Show sample data
+        st.sidebar.write("**Sample Week Data:**")
+        sample_data = df[['Planned_Week_Label', 'Actual_Week_Label', 'Week_Status']].head(5)
+        st.sidebar.write(sample_data)
+    elif time_comparison == "Month" and 'Month_Status' in df.columns:
+        st.sidebar.write("**Month Status Distribution:**")
+        month_status_counts = df['Month_Status'].value_counts()
+        for status, count in month_status_counts.items():
+            st.sidebar.write(f"• {status}: {count}")
+        # Debug: Show sample data
+        st.sidebar.write("**Sample Month Data:**")
+        sample_data = df[['Planned_Month_Label', 'Actual_Month_Label', 'Month_Status']].head(5)
+        st.sidebar.write(sample_data)
     st.components.v1.html(d3_html, height=900)
     csv = df.to_csv(index=False)
     st.sidebar.download_button("📥 Download All Data CSV", csv, "all_sites.csv", "text/csv")
