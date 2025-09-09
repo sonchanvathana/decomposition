@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 st.set_page_config(layout="wide")
-st.title("📊 Decomposition Tree (Delay/KPI/Any Scenario)")
+st.title("📊 Decomposition Tree")
 
 def convert_pandas_to_json_serializable(obj):
     """Convert pandas objects to JSON serializable format"""
@@ -175,15 +175,9 @@ def calculate_month_status(row):
         return 'Pending'
 
 def node_color(status):
-    return {
-        'Early': '#3B82F6',      # Blue for early completion
-        'Delayed': '#EF4444',    # Red for delayed
-        'On-Time': '#10B981',    # Green for on-time
-        'Pending': '#6B7280',    # Gray for pending
-        'No Data': '#9CA3AF'     # Light gray for no data
-    }.get(str(status), '#3B82F6')
+    return '#3B82F6'
 
-def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison="Day"):
+def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison="Day", color_mode="Uniform", uniform_color="#3B82F6", level_colors=None, per_node_colors=None, display_filters=None):
     # Calculate total for percentage calculation
     total_count = len(df)
     
@@ -193,6 +187,11 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
         col = hierarchy[level]
         for val, group in df_sub.groupby(col):
             val_str = "No Data" if pd.isna(val) else str(val)
+            # Visibility-only filtering: skip nodes not selected for display
+            if isinstance(display_filters, dict) and col in display_filters:
+                allowed_set = display_filters.get(col)
+                if isinstance(allowed_set, set) and allowed_set and val_str not in allowed_set:
+                    continue
             value = int(group[value_col].sum()) if value_col else int(len(group))
             
             # Calculate percentage
@@ -238,6 +237,13 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
                     status_mode = mode_result[0]
 
             
+            # Resolve node color
+            node_color_value = uniform_color
+            if color_mode == "By Level" and isinstance(level_colors, dict) and level in level_colors:
+                node_color_value = level_colors.get(level, uniform_color)
+            if isinstance(per_node_colors, dict) and (col, val_str) in per_node_colors:
+                node_color_value = per_node_colors[(col, val_str)]
+
             node = {
                 "name": f"{col}: {val_str}",
                 "children": [],
@@ -247,7 +253,7 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
                 "column": col,
                 "node_value": val_str,
                 "tooltip_data": tooltip_data,
-                "color": node_color(status_mode),
+                "color": node_color_value,
                 "raw_data": convert_pandas_to_json_serializable(group.to_dict('records'))
             }
             add_node(level + 1, node, group)
@@ -263,6 +269,11 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
     col = hierarchy[0]
     for val, group in df.groupby(col):
         val_str = "No Data" if pd.isna(val) else str(val)
+        # Visibility-only filtering for root level
+        if isinstance(display_filters, dict) and col in display_filters:
+            allowed_set = display_filters.get(col)
+            if isinstance(allowed_set, set) and allowed_set and val_str not in allowed_set:
+                continue
         value = int(group[value_col].sum()) if value_col else int(len(group))
         
         # Calculate percentage for root nodes
@@ -305,6 +316,14 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
             if len(mode_result) > 0:
                 status_mode = mode_result[0]
         
+        # Resolve color for root node
+        root_level = 0
+        root_color_value = uniform_color
+        if color_mode == "By Level" and isinstance(level_colors, dict) and root_level in level_colors:
+            root_color_value = level_colors.get(root_level, uniform_color)
+        if isinstance(per_node_colors, dict) and (col, val_str) in per_node_colors:
+            root_color_value = per_node_colors[(col, val_str)]
+
         root_node = {
             "name": f"{col}: {val_str}",
             "children": [],
@@ -314,7 +333,7 @@ def build_tree(df, hierarchy, value_col=None, tooltip_cols=None, time_comparison
             "column": col,
             "node_value": val_str,
             "tooltip_data": tooltip_data,
-            "color": node_color(status_mode),
+            "color": root_color_value,
             "raw_data": convert_pandas_to_json_serializable(group.to_dict('records'))
         }
         add_node(1, root_node, group)
@@ -330,13 +349,8 @@ if uploaded_file:
     all_cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include='number').columns.tolist()
     
-    # Time comparison options (define this first)
-    st.sidebar.header("📅 Time Comparison Options")
-    time_comparison = st.sidebar.selectbox(
-        "Compare by:",
-        ["Day", "Week (Monday start)", "Month"],
-        help="Choose how to group and compare your data for better insights"
-    )
+    # Time comparison fixed to Day (options removed)
+    time_comparison = "Day"
     
     # Add time-based columns to the dataframe
     if 'Planned_OnAir_Date' in df.columns:
@@ -388,6 +402,24 @@ if uploaded_file:
         help="⚠️ **Required:** Select at least one column. The order determines the tree structure - first column = root level, second = second level, etc."
     )
     tooltip_cols = st.sidebar.multiselect("Tooltip columns (aggregated for each node)", all_cols, default=[])
+
+    # Visibility filters (hide unmatched nodes, keep totals)
+    st.sidebar.header("👁️ Visibility Filters")
+    display_filters = {}
+    for col in hierarchy:
+        try:
+            # Unique values as strings with No Data
+            raw_vals = df[col].astype(object).where(pd.notna(df[col]), None)
+            values = []
+            for v in raw_vals.astype(str).unique().tolist():
+                values.append("No Data" if v in ["None", "nan", "NaT"] else v)
+            values = sorted(set(values))
+            selected = st.sidebar.multiselect(f"Show values for {col}", values, default=values)
+            # Only store if user narrowed selection
+            if set(selected) != set(values):
+                display_filters[col] = set(selected)
+        except Exception:
+            pass
     
     # Node style customization
     st.sidebar.header("🎨 Node Style Customization")
@@ -395,7 +427,11 @@ if uploaded_file:
     # Node shape selection
     node_shape = st.sidebar.selectbox(
         "Node Shape:",
-        ["Circle", "Square", "Diamond", "Triangle", "Star", "Hexagon", "Cross", "Plus"],
+        [
+            "Circle", "Square", "Rounded Rectangle", "Capsule", "Ellipse",
+            "Diamond", "Triangle", "Star", "Pentagon", "Hexagon", "Octagon",
+            "Chevron", "Parallelogram", "Teardrop", "Donut", "Cross", "Plus"
+        ],
         help="Choose the shape for tree nodes. Different shapes can help distinguish node types or levels."
     )
     
@@ -418,11 +454,33 @@ if uploaded_file:
         help="Adjust the thickness of connection lines between nodes"
     )
     
-    line_color = st.sidebar.color_picker(
-        "Line Color:",
-        value="#9CA3AF",
-        help="Choose the color for connection lines"
+    # Line color: allow preset or custom selection
+    line_color_presets = {
+        "Default Gray": "#9CA3AF",
+        "Slate": "#64748B",
+        "Black": "#111827",
+        "Blue": "#3B82F6",
+        "Green": "#10B981",
+        "Amber": "#F59E0B",
+        "Red": "#EF4444",
+        "Violet": "#8B5CF6",
+        "Cyan": "#06B6D4"
+    }
+    line_color_source = st.sidebar.selectbox(
+        "Line Color Source:",
+        ["Preset", "Custom"],
+        index=0,
+        help="Use a preset color or pick a custom RGB/HEX"
     )
+    if line_color_source == "Preset":
+        chosen_line_preset = st.sidebar.selectbox("Line Color (preset):", list(line_color_presets.keys()), index=0)
+        line_color = line_color_presets[chosen_line_preset]
+    else:
+        line_color = st.sidebar.color_picker(
+            "Line Color:",
+            value="#9CA3AF",
+            help="Choose the color for connection lines"
+        )
     
     line_opacity = st.sidebar.slider(
         "Line Opacity:",
@@ -449,35 +507,233 @@ if uploaded_file:
         index=2,  # Default to 600
         help="Choose the font weight for labels"
     )
-    
-    # Status color customization
-    use_custom_colors = st.sidebar.checkbox("Customize status colors", False)
-    
-    if use_custom_colors:
-        early_color = st.sidebar.color_picker("Early Color", "#3B82F6", help="Color for Early On-Air status")
-        ontime_color = st.sidebar.color_picker("On-Time Color", "#10B981", help="Color for On-Time On-Air status")
-        delayed_color = st.sidebar.color_picker("Delayed Color", "#EF4444", help="Color for Delayed On-Air status")
-        pending_color = st.sidebar.color_picker("Pending Color", "#6B7280", help="Color for Pending On-Air status")
-        
-        # Update the node_color function with custom colors
-        def node_color(status):
-            return {
-                'Early': early_color,
-                'Delayed': delayed_color,
-                'On-Time': ontime_color,
-                'Pending': pending_color,
-                'No Data': '#9CA3AF'
-            }.get(str(status), early_color)
+    font_color_source = st.sidebar.selectbox(
+        "Font Color Source:",
+        ["Preset", "Custom"],
+        index=0,
+        help="Use a preset color or pick a custom RGB/HEX"
+    )
+    font_color_presets = {
+        "Default Black": "#111111",
+        "Slate": "#334155",
+        "Gray": "#374151",
+        "Blue": "#1F2937",
+        "White (for dark bg)": "#FFFFFF"
+    }
+    if font_color_source == "Preset":
+        chosen_font_preset = st.sidebar.selectbox("Font Color (preset):", list(font_color_presets.keys()), index=0)
+        font_color = font_color_presets[chosen_font_preset]
     else:
-        # Default colors
-        def node_color(status):
-            return {
-                'Early': '#3B82F6',      # Blue for early completion
-                'Delayed': '#EF4444',    # Red for delayed
-                'On-Time': '#10B981',    # Green for on-time
-                'Pending': '#6B7280',    # Gray for pending
-                'No Data': '#9CA3AF'     # Light gray for no data
-            }.get(str(status), '#3B82F6')
+        font_color = st.sidebar.color_picker(
+            "Font Color:",
+            value="#111111",
+            help="Choose the color for label text"
+        )
+    font_style = st.sidebar.selectbox(
+        "Font Style:",
+        ["normal", "italic", "oblique"],
+        index=0,
+        help="Choose the font style for labels"
+    )
+    font_family = st.sidebar.selectbox(
+        "Font Family:",
+        [
+            "Calibri, Arial, sans-serif",
+            "Arial, Helvetica, sans-serif",
+            "Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif",
+            "Georgia, serif",
+            "Times New Roman, Times, serif",
+            "Trebuchet MS, Lucida Sans Unicode, Lucida Grande, Lucida Sans, Arial, sans-serif",
+            "Tahoma, Geneva, Verdana, sans-serif",
+            "Courier New, Courier, monospace"
+        ],
+        index=0,
+        help="Choose the typeface / font family for labels"
+    )
+
+    # Label positioning to avoid overlap with node symbols
+    st.sidebar.header("🔤 Label Positioning")
+    label_position = st.sidebar.selectbox(
+        "Label Position:",
+        ["Top", "Bottom", "Left", "Right"],
+        index=0,
+        help="Position of label relative to node"
+    )
+    label_offset = st.sidebar.slider(
+        "Label Offset (px):",
+        min_value=0,
+        max_value=40,
+        value=10,
+        help="Gap between node and label"
+    )
+    
+    # Presentation style
+    style_theme = st.sidebar.selectbox(
+        "Style theme",
+        ["Standard", "Mind Map"],
+        index=0,
+        help="Mind Map adds rounded outlines and presentation styling"
+    )
+    show_group_outlines = False
+    group_outline_level = 0
+    minimal_labels = False
+    outline_opacity = 0.25
+    if style_theme == "Mind Map":
+        show_group_outlines = st.sidebar.checkbox("Show dashed group outlines", value=False)
+        group_outline_level = st.sidebar.slider(
+            "Group outline level",
+            min_value=0,
+            max_value=max(0, len(hierarchy) - 1),
+            value=min(2, max(0, len(hierarchy) - 1)),
+            help="Draw a rounded dashed box around each subtree at this depth"
+        )
+        minimal_labels = st.sidebar.checkbox("Minimal labels (name only)", value=False, help="Hide values/percentages on nodes for a clean look")
+        outline_opacity = st.sidebar.slider(
+            "Outline opacity",
+            min_value=0.10,
+            max_value=0.50,
+            value=0.25,
+            step=0.05,
+            help="Subtle outlines keep the style professional and minimalist"
+        )
+    
+    # Label content mode
+    label_display_mode = st.sidebar.selectbox(
+        "Data label content",
+        ["Value + Percentage", "Value only", "Percentage only"],
+        index=0,
+        help="Choose what to append to node labels"
+    )
+    if label_display_mode == "Value only":
+        label_mode_key = "value_only"
+    elif label_display_mode == "Percentage only":
+        label_mode_key = "percentage_only"
+    else:
+        label_mode_key = "value_percentage"
+
+    # Node color configuration
+    st.sidebar.header("🎨 Node Colors")
+    color_mode = st.sidebar.selectbox(
+        "Color mode",
+        ["Uniform", "By Level", "Per Node (UI)", "Per Node (CSV)"],
+        index=0,
+        help="Uniform = one color; By Level = per-depth; Per Node (UI/CSV) = specific nodes"
+    )
+    uniform_node_color = "#3B82F6"
+    level_colors = None
+    per_node_colors = None
+    if color_mode == "Uniform":
+        # Single-color presets plus custom picker
+        single_color_presets = {
+            "Default Blue": "#3B82F6",
+            "Green": "#10B981",
+            "Amber": "#F59E0B",
+            "Red": "#EF4444",
+            "Violet": "#8B5CF6",
+            "Teal": "#14B8A6",
+            "Orange": "#F97316",
+            "Cyan": "#06B6D4",
+            "Slate": "#64748B",
+            "Black": "#111827"
+        }
+        uniform_color_source = st.sidebar.selectbox("Uniform color source:", ["Preset", "Custom"], index=0)
+        if uniform_color_source == "Preset":
+            chosen_uniform_preset = st.sidebar.selectbox("Uniform Color (preset):", list(single_color_presets.keys()), index=0)
+            uniform_node_color = single_color_presets[chosen_uniform_preset]
+        else:
+            uniform_node_color = st.sidebar.color_picker(
+                "Node Color",
+                value="#3B82F6",
+                help="Set the color for all nodes"
+            )
+    elif color_mode == "By Level":
+        # Preset palettes + optional customization
+        level_palette_presets = {
+            "Category10 (d3)": [
+                "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
+            ],
+            "Tableau10": [
+                "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
+                "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"
+            ],
+            "Okabe-Ito (colorblind-safe)": [
+                "#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7",
+                "#F0E442", "#56B4E9", "#000000"
+            ],
+            "Set2": ["#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F", "#E5C494", "#B3B3B3"],
+            "Pastel1": ["#FBB4AE", "#B3CDE3", "#CCEBC5", "#DECBE4", "#FED9A6", "#FFFFCC", "#E5D8BD", "#FDDAEC", "#F2F2F2"]
+        }
+        palette_name = st.sidebar.selectbox("Level palette (preset):", list(level_palette_presets.keys()), index=0)
+        customize_levels = st.sidebar.checkbox("Customize palette colors", value=False)
+        max_levels = len(hierarchy)
+        level_colors = {}
+        base_palette = level_palette_presets[palette_name]
+        if not customize_levels:
+            for lvl in range(max_levels):
+                level_colors[lvl] = base_palette[lvl % len(base_palette)]
+        else:
+            for lvl in range(max_levels):
+                default_color = base_palette[lvl % len(base_palette)]
+                level_colors[lvl] = st.sidebar.color_picker(
+                    f"Level {lvl} Color",
+                    value=default_color
+                )
+    elif color_mode == "Per Node (UI)":
+        # Interactive per-node overrides with session persistence
+        if "per_node_ui_colors" not in st.session_state:
+            st.session_state["per_node_ui_colors"] = {}
+        per_node_colors = dict(st.session_state["per_node_ui_colors"])  # copy
+        if hierarchy:
+            selected_override_column = st.sidebar.selectbox("Override column", hierarchy)
+            unique_vals = (
+                df[selected_override_column]
+                .astype(object)
+                .where(pd.notna(df[selected_override_column]), None)
+            )
+            # Convert to strings with No Data for None/NaN
+            normalized_vals = []
+            for v in unique_vals.astype(str).unique().tolist():
+                normalized_vals.append("No Data" if v in ["None", "nan", "NaT"] else v)
+            normalized_vals = sorted(set(normalized_vals))
+            st.sidebar.write("Set colors for each value:")
+            for nval in normalized_vals:
+                key = f"color__{selected_override_column}__{nval}"
+                default_color = per_node_colors.get((selected_override_column, nval), "#3B82F6")
+                chosen = st.sidebar.color_picker(f"{selected_override_column} = {nval}", value=default_color, key=key)
+                per_node_colors[(selected_override_column, nval)] = chosen
+            if st.sidebar.button("Save overrides", use_container_width=True):
+                st.session_state["per_node_ui_colors"] = per_node_colors
+            if st.sidebar.button("Reset overrides", use_container_width=True):
+                st.session_state["per_node_ui_colors"] = {}
+                per_node_colors = {}
+        else:
+            st.sidebar.info("Select hierarchy columns first.")
+    else:  # Per Node (CSV)
+        st.sidebar.markdown("Upload a CSV to override colors per node.")
+        st.sidebar.markdown("Columns: 'column' (hierarchy), 'node_value' (value), 'color' (hex)")
+        per_node_file = st.sidebar.file_uploader("Per-node color CSV", type=["csv"])
+        if per_node_file is not None:
+            try:
+                per_df = pd.read_csv(per_node_file)
+                per_node_colors = {}
+                for _, row in per_df.iterrows():
+                    colname = str(row.get("column", "")).strip()
+                    nval = str(row.get("node_value", "")).strip()
+                    colhex = str(row.get("color", "")).strip()
+                    if colname and nval and colhex:
+                        per_node_colors[(colname, nval)] = colhex
+            except Exception as e:
+                st.sidebar.error(f"Failed to parse per-node color CSV: {e}")
+
+    # Node order configuration
+    st.sidebar.header("↕ Node Order")
+    order_mode = st.sidebar.selectbox(
+        "Initial sort",
+        ["Custom (as-is)", "Name A→Z", "Name Z→A", "Value Asc", "Value Desc"],
+        index=0
+    )
+    enable_drag_reorder = st.sidebar.checkbox("Enable drag & drop reorder", True)
     
     agg_method = st.sidebar.selectbox("Aggregation method", ["Count", "Sum", "Average"])
     value_col = None
@@ -489,7 +745,7 @@ if uploaded_file:
         df["__value__"] = pd.to_numeric(df[value_col], errors="coerce").fillna(0)
         value_col = "__value__"
 
-    df = kpi_panel(df, time_comparison)
+    # KPI panel removed
 
     # Check if hierarchy is empty and provide user guidance
     if not hierarchy:
@@ -516,7 +772,18 @@ if uploaded_file:
         else:
             updated_hierarchy.append(col)
     
-    tree_data = build_tree(df, updated_hierarchy, value_col, tooltip_cols, time_comparison)
+    tree_data = build_tree(
+        df,
+        updated_hierarchy,
+        value_col,
+        tooltip_cols,
+        time_comparison,
+        color_mode=color_mode,
+        uniform_color=uniform_node_color,
+        level_colors=level_colors,
+        per_node_colors=per_node_colors,
+        display_filters=display_filters
+    )
     if tree_data and len(tree_data) > 0:
         if len(tree_data) == 1:
             d3_tree_data = tree_data[0]
@@ -551,6 +818,16 @@ if uploaded_file:
         }
         tree_data_json = json.dumps(d3_tree_data_simple, ensure_ascii=False).replace('</', r'<\/')
 
+    # Export quality settings
+    st.sidebar.header("🖼️ Export Settings")
+    export_png_scale = st.sidebar.slider(
+        "PNG export quality (scale)",
+        min_value=1,
+        max_value=6,
+        value=3,
+        help="Increase for sharper images (and larger files)"
+    )
+
     d3_html = f"""
     <!DOCTYPE html>
     <html>
@@ -570,6 +847,161 @@ if uploaded_file:
         // Font configuration
         const fontSize = {font_size};
         const fontWeight = "{font_weight}";
+        const fontColor = "{font_color}";
+        const fontStyle = "{font_style}";
+        const fontFamily = "{font_family}";
+        // Label positioning
+        const labelPosition = "{label_position}".toLowerCase();
+        const labelOffset = {label_offset};
+        
+        // Style/theme
+        const styleMode = "{style_theme}"; // Standard | Mind Map
+        const showGroupOutlines = {str(show_group_outlines).lower()};
+        const groupOutlineLevel = {group_outline_level};
+        const minimalLabels = {str(minimal_labels).lower()};
+        const outlineOpacity = {outline_opacity};
+        
+        // Ordering and interactions
+        const orderMode = "{order_mode}";
+        const enableDragReorder = {str(enable_drag_reorder).lower()};
+        let manualOrder = false;
+        let dragActive = false;
+
+        // Label display mode from sidebar
+        const labelMode = "{label_mode_key}"; // value_only | percentage_only | value_percentage
+        // Export quality scale from sidebar
+        const exportScale = {export_png_scale};
+
+        // Helpers
+        function roundedRectPath(x, y, width, height, radius) {{
+          const r = Math.min(radius, width / 2, height / 2);
+          return "M " + (x + r) + "," + y
+               + " H " + (x + width - r)
+               + " A " + r + "," + r + " 0 0 1 " + (x + width) + "," + (y + r)
+               + " V " + (y + height - r)
+               + " A " + r + "," + r + " 0 0 1 " + (x + width - r) + "," + (y + height)
+               + " H " + (x + r)
+               + " A " + r + "," + r + " 0 0 1 " + x + "," + (y + height - r)
+               + " V " + (y + r)
+               + " A " + r + "," + r + " 0 0 1 " + (x + r) + "," + y
+               + " Z";
+        }}
+
+        function formatLabel(d) {{
+          const name = d.data.name || "";
+          const hasValue = d.data.value !== undefined && d.data.value !== null;
+          const hasPct = d.data.percentage !== undefined && d.data.percentage !== null;
+          if (styleMode === "Mind Map" && minimalLabels) {{
+            return name;
+          }}
+          if (labelMode === "value_only") {{
+            return hasValue ? `${{name}} (${{d.data.value}})` : name;
+          }} else if (labelMode === "percentage_only") {{
+            return hasPct ? `${{name}} (${{d.data.percentage}}%)` : name;
+          }}
+          // default value + percentage
+          return hasValue && hasPct ? `${{name}} (${{d.data.value}}, ${{d.data.percentage}}%)` : name;
+        }}
+
+        // Compute label x/y/anchor based on position and offsets
+        function getLabelAttrs() {{
+          if (labelPosition === 'top') {{
+            return {{ x: 0, y: -(nodeSize + labelOffset), anchor: 'middle' }};
+          }} else if (labelPosition === 'bottom') {{
+            return {{ x: 0, y: (nodeSize + labelOffset + Math.max(0, fontSize * 0.85)), anchor: 'middle' }};
+          }} else if (labelPosition === 'left') {{
+            return {{ x: -(nodeSize + labelOffset), y: 4, anchor: 'end' }};
+          }}
+          // right (default)
+          return {{ x: (nodeSize + labelOffset), y: 4, anchor: 'start' }};
+        }}
+
+        function compareNodes(a, b) {{
+          const nameA = (a.data.name || "").toString().toLowerCase();
+          const nameB = (b.data.name || "").toString().toLowerCase();
+          const valA = (a.data.value || 0);
+          const valB = (b.data.value || 0);
+          if (orderMode === "Name A→Z") return nameA.localeCompare(nameB);
+          if (orderMode === "Name Z→A") return nameB.localeCompare(nameA);
+          if (orderMode === "Value Asc") return valA - valB;
+          if (orderMode === "Value Desc") return valB - valA;
+          return 0; // Custom (as-is)
+        }}
+
+        // Compute bounds for a node including label in current configuration
+        function getNodeBounds(d, textWidth) {{
+          const halfText = textWidth / 2;
+          let top = d.x - (nodeSize + 8);
+          let bottom = d.x + (nodeSize + 8);
+          let left = d.y - Math.max(halfText, nodeSize);
+          let right = d.y + Math.max(halfText, nodeSize);
+          switch (labelPosition) {{
+            case 'top':
+              top = Math.min(top, d.x - (nodeSize + labelOffset + fontSize));
+              break;
+            case 'bottom':
+              bottom = Math.max(bottom, d.x + (nodeSize + labelOffset + fontSize));
+              break;
+            case 'left':
+              left = Math.min(left, d.y - (nodeSize + labelOffset + textWidth));
+              break;
+            case 'right':
+            default:
+              right = Math.max(right, d.y + (nodeSize + labelOffset + textWidth));
+              break;
+          }}
+          return {{ top, bottom, left, right }};
+        }}
+
+        function sortArray(arr) {{
+          if (!arr) return;
+          arr.sort(compareNodes);
+          arr.forEach(child => {{
+            if (child.children) sortArray(child.children);
+            if (child._children) sortArray(child._children);
+          }});
+        }}
+
+        function applyInitialSort(root) {{
+          if (orderMode === "Custom (as-is)" || manualOrder) return;
+          sortArray(root.children);
+          sortArray(root._children);
+        }}
+        
+        // Preserve manual drag order for exports of the complete tree
+        function buildOrderMapFromCurrent(rootNode) {{
+          const orderMap = new Map();
+          function dfs(node, path) {{
+            const key = path.join('>');
+            const container = node.children ? node.children : node._children;
+            if (container && container.length) {{
+              orderMap.set(key, container.map(ch => ch.data && ch.data.name ? ch.data.name : ''));
+              container.forEach(ch => dfs(ch, path.concat(ch.data && ch.data.name ? ch.data.name : '')));
+            }}
+          }}
+          dfs(rootNode, [rootNode.data && rootNode.data.name ? rootNode.data.name : 'root']);
+          return orderMap;
+        }}
+
+        function reorderExportRoot(exportRootNode, orderMap) {{
+          function reorder(node, path) {{
+            const key = path.join('>');
+            const desired = orderMap.get(key);
+            if (desired && node.children && node.children.length) {{
+              node.children.sort((a, b) => {{
+                const ai = desired.indexOf(a.data && a.data.name ? a.data.name : '');
+                const bi = desired.indexOf(b.data && b.data.name ? b.data.name : '');
+                const aIdx = ai === -1 ? Number.MAX_SAFE_INTEGER : ai;
+                const bIdx = bi === -1 ? Number.MAX_SAFE_INTEGER : bi;
+                return aIdx - bIdx;
+              }});
+            }}
+            if (node.children) {{
+              node.children.forEach(ch => reorder(ch, path.concat(ch.data && ch.data.name ? ch.data.name : '')));
+            }}
+          }}
+          reorder(exportRootNode, [exportRootNode.data && exportRootNode.data.name ? exportRootNode.data.name : 'root']);
+        }}
         
         // Node shape functions
         function createNodeShape(selection, size) {{
@@ -591,6 +1023,38 @@ if uploaded_file:
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3)
                 .attr("rx", 2);
+              break;
+            case "Rounded Rectangle":
+              selection.append("rect")
+                .attr("width", size * 2.4)
+                .attr("height", size * 1.6)
+                .attr("x", -(size * 1.2))
+                .attr("y", -(size * 0.8))
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3)
+                .attr("rx", size * 0.5)
+                .attr("ry", size * 0.5);
+              break;
+            case "Capsule":
+              selection.append("rect")
+                .attr("width", size * 3.0)
+                .attr("height", size * 1.4)
+                .attr("x", -(size * 1.5))
+                .attr("y", -(size * 0.7))
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3)
+                .attr("rx", size * 0.7)
+                .attr("ry", size * 0.7);
+              break;
+            case "Ellipse":
+              selection.append("ellipse")
+                .attr("rx", size * 1.2)
+                .attr("ry", size * 0.8)
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
               break;
             case "Diamond":
               selection.append("polygon")
@@ -628,6 +1092,21 @@ if uploaded_file:
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
               break;
+            case "Pentagon":
+              selection.append("polygon")
+                .attr("points", d => {{
+                  const s = size;
+                  const pts = [];
+                  for (let i = 0; i < 5; i++) {{
+                    const angle = -Math.PI / 2 + (i * 2 * Math.PI / 5);
+                    pts.push(`${{Math.cos(angle) * s}},${{Math.sin(angle) * s}}`);
+                  }}
+                  return pts.join(' ');
+                }})
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
+              break;
             case "Hexagon":
               selection.append("polygon")
                 .attr("points", d => {{
@@ -642,6 +1121,73 @@ if uploaded_file:
                 .attr("fill", d => d.data.color || "#CBD5E1")
                 .attr("stroke", "#fff")
                 .attr("stroke-width", 3);
+              break;
+            case "Octagon":
+              selection.append("polygon")
+                .attr("points", d => {{
+                  const s = size;
+                  const pts = [];
+                  for (let i = 0; i < 8; i++) {{
+                    const angle = -Math.PI / 8 + (i * 2 * Math.PI / 8);
+                    pts.push(`${{Math.cos(angle) * s}},${{Math.sin(angle) * s}}`);
+                  }}
+                  return pts.join(' ');
+                }})
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
+              break;
+            case "Chevron":
+              selection.append("polygon")
+                .attr("points", d => {{
+                  const s = size;
+                  const w = s * 2.2, h = s * 1.6;
+                  const coords = [
+                    [-w/2, -h/2], [0, 0], [-w/2, h/2], [w/2, h/2], [0, 0], [w/2, -h/2]
+                  ];
+                  return coords.map(c => c[0] + "," + c[1]).join(' ');
+                }})
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
+              break;
+            case "Parallelogram":
+              selection.append("polygon")
+                .attr("points", d => {{
+                  const s = size;
+                  const w = s * 2.4, h = s * 1.6, skew = s * 0.6;
+                  const coords = [
+                    [-(w/2 + skew), -h/2], [w/2 + skew, -h/2], [w/2 - skew, h/2], [-(w/2 - skew), h/2]
+                  ];
+                  return coords.map(c => c[0] + "," + c[1]).join(' ');
+                }})
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
+              break;
+            case "Teardrop":
+              selection.append("path")
+                .attr("d", d => {{
+                  const s = size;
+                  const rx = s * 0.9, ry = s * 0.9;
+                  return "M 0,-" + ry + " A " + rx + "," + ry + " 0 1,1 0," + ry + " L 0," + (s * 1.6) + " Z";
+                }})
+                .attr("fill", d => d.data.color || "#CBD5E1")
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 3);
+              break;
+            case "Donut":
+              // Keep outer radius equal to `size` so Donut doesn't appear larger
+              const donutThickness = Math.max(4, size * 0.35);
+              const donutRadius = Math.max(4, size - donutThickness / 2);
+              selection.append("circle")
+                .attr("class", "donut-ring")
+                .attr("r", donutRadius)
+                .attr("fill", "none")
+                .style("stroke", d => d.data.color || "#CBD5E1")
+                .style("stroke-width", donutThickness)
+                .style("stroke-linecap", "round")
+                .style("stroke-linejoin", "round");
               break;
             case "Cross":
               selection.append("g")
@@ -704,12 +1250,15 @@ if uploaded_file:
       </script>
       <style>
       .node circle {{ stroke: #fff; stroke-width: 3px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.10)); }}
-      .node text {{ font-family: Calibri, Arial, sans-serif; font-size: {font_size}px; font-weight: {font_weight}; fill: #111; }}
+      .node text {{ font-family: {font_family}; font-size: {font_size}px; font-weight: {font_weight}; fill: {font_color}; font-style: {font_style}; }}
       .link {{ fill: none; stroke: {line_color}; stroke-width: {line_width}px; stroke-opacity: {line_opacity}; }}
       .tooltip {{
         position: absolute; background: #1e293b; color: #fff;
         padding: 12px 16px; border-radius: 8px; font-size: 13px; font-family: Calibri, Arial, sans-serif;
         pointer-events: none; z-index: 1000; max-width: 320px; line-height: 1.5; box-shadow: 0 8px 32px rgba(0,0,0,0.10);
+      }}
+      .region-outline {{
+        fill: none; stroke: #94A3B8; stroke-width: 2.5px; stroke-dasharray: 8 6;
       }}
       .controls {{
         position: absolute; top: 10px; left: 10px; z-index: 1001;
@@ -809,14 +1358,12 @@ if uploaded_file:
     <div class="zoom-info" id="zoomInfo">Zoom: 100%</div>
     <div class="download-panel">
       <div style="font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 4px;">📥 Download Chart</div>
-      <button class="download-btn" onclick="downloadPNG()">🖼️ PNG (Complete Tree)</button>
-      <button class="download-btn transparent" onclick="downloadPNGTransparent()">🖼️ PNG (White Bg)</button>
-      <button class="download-btn svg" onclick="downloadSVG()">📐 SVG (Complete Tree)</button>
-      <button class="download-btn svg transparent" onclick="downloadSVGTransparent()">📐 SVG (White Bg)</button>
+      <button class="download-btn" onclick="downloadPNGAllComplete()">🖼️ PNG (Complete Tree • both bg)</button>
+      <button class="download-btn svg" onclick="downloadSVGAllComplete()">📐 SVG (Complete Tree • both bg)</button>
       <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #E5E7EB;">
         <div style="font-size: 10px; color: #6B7280; margin-bottom: 4px;">Current View Export:</div>
-        <button class="download-btn" onclick="downloadCurrentViewPNG()" style="font-size: 11px; padding: 6px 10px;">🖼️ PNG (Current View)</button>
-        <button class="download-btn svg" onclick="downloadCurrentViewSVG()" style="font-size: 11px; padding: 6px 10px;">📐 SVG (Current View)</button>
+        <button class="download-btn" onclick="downloadCurrentViewPNGAll()" style="font-size: 11px; padding: 6px 10px;">🖼️ PNG (Current View • both bg)</button>
+        <button class="download-btn svg" onclick="downloadCurrentViewSVGAll()" style="font-size: 11px; padding: 6px 10px;">📐 SVG (Current View • both bg)</button>
       </div>
     </div>
     <script>
@@ -837,6 +1384,9 @@ if uploaded_file:
       if (d.depth > 1) d.children = null; // Start collapsed for deeper levels
     }});
     
+    // Apply initial sorting if requested
+    applyInitialSort(root);
+    
     const svg = d3.select("#tree").append("svg")
       .attr("width", width).attr("height", height)
       .attr("viewBox", [0, 0, width, height])
@@ -854,8 +1404,13 @@ if uploaded_file:
     
     // Center the tree by default
     const g = svg.append("g");
+    const gRegion = g.append("g").attr("class", "regions");
     const gLink = g.append("g").attr("stroke", lineColor).attr("stroke-opacity", lineOpacity);
     const gNode = g.append("g").attr("cursor", "pointer");
+    // Ensure proper layer order: regions at bottom, links middle, nodes top
+    gRegion.lower();
+    gLink.raise();
+    gNode.raise();
     const tooltip = d3.select("body").append("div").attr("class", "tooltip").style("opacity", 0);
     
     function updateZoomInfo(scale) {{
@@ -871,6 +1426,8 @@ if uploaded_file:
         if (completeNode.children) {{
           currentNode._children = completeNode.children;
           currentNode.children = completeNode.children;
+          // Ensure parent pointers are correct for layout/link generation
+          currentNode.children.forEach(c => {{ c.parent = currentNode; }});
           
           // Recursively restore children for each child node
           currentNode.children.forEach((child, index) => {{
@@ -958,6 +1515,9 @@ if uploaded_file:
         if (d._children) d.children = d._children;
       }});
       
+      // Reorder export tree to follow manual drag order if any
+      const currentOrderMap = buildOrderMapFromCurrent(root);
+      reorderExportRoot(exportRoot, currentOrderMap);
       // Calculate tree layout for export
       const exportTree = d3.tree().nodeSize([dx, dy]);
       exportTree(exportRoot);
@@ -965,24 +1525,29 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure = document.createElement('canvas').getContext('2d');
+      measure.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound = Infinity, maxXBound = -Infinity, minYBound = Infinity, maxYBound = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound) minXBound = b.top;
+        if (b.bottom > maxXBound) maxXBound = b.bottom;
+        if (b.left < minYBound) minYBound = b.left;
+        if (b.right > maxYBound) maxYBound = b.right;
+      }});
+      const basePadding = 40;
+      const outlineExtraPadding = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding = basePadding + outlineExtraPadding;
+      const treeWidth = Math.ceil((maxYBound - minYBound) + padding * 2);
+      const treeHeight = Math.ceil((maxXBound - minXBound) + padding * 2);
       
       // Create high-resolution canvas
-      const scale = 3; // 3x resolution for crisp images
       const canvas = document.createElement('canvas');
-      canvas.width = treeWidth * scale;
-      canvas.height = treeHeight * scale;
+      canvas.width = treeWidth * exportScale;
+      canvas.height = treeHeight * exportScale;
       const ctx = canvas.getContext('2d');
       
       // Clear canvas (transparent background)
@@ -990,12 +1555,13 @@ if uploaded_file:
       
       // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth)
-        .attr('height', treeHeight);
+        .attr('width', treeWidth * exportScale)
+        .attr('height', treeHeight * exportScale)
+        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`);
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound + padding }}, ${{ -minXBound + padding }})`);
       
       // Use the already calculated export tree
       const tempLinks = exportRoot.links();
@@ -1022,15 +1588,48 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')  // Position text above the node
-        .attr('x', 0)           // Center align horizontally
-        .attr('text-anchor', 'middle')  // Center align the text
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
-        .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .attr('fill', fontColor)
+        .attr('font-style', fontStyle)
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = exportRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        tempG.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Convert SVG to data URL and download
       const svgData = new XMLSerializer().serializeToString(tempSvg.node());
       const svgBlob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
@@ -1038,10 +1637,11 @@ if uploaded_file:
       
       const img = new Image();
       img.onload = function() {{
+        // Draw at native high-res size to avoid interpolation blur
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(function(blob) {{
           const link = document.createElement('a');
-          link.download = `decomposition_tree_${{new Date().toISOString().slice(0,10)}}.png`;
+          link.download = `decomposition_tree_transparent_${{new Date().toISOString().slice(0,10)}}.png`;
           link.href = URL.createObjectURL(blob);
           link.click();
           URL.revokeObjectURL(url);
@@ -1051,6 +1651,12 @@ if uploaded_file:
       img.src = url;
     }}
     
+    // Wrapper to download both transparent and white background PNG (complete tree)
+    function downloadPNGAllComplete() {{
+      try {{ downloadPNG(); }} catch (e) {{ console.error(e); }}
+      setTimeout(() => {{ try {{ downloadPNGTransparent(); }} catch (e) {{ console.error(e); }} }}, 250);
+    }}
+    
     function downloadPNGTransparent() {{
       // Create a complete tree with all nodes expanded for export
       const exportRoot = d3.hierarchy(data);
@@ -1058,6 +1664,9 @@ if uploaded_file:
         if (d._children) d.children = d._children;
       }});
       
+      // Reorder export tree to follow manual drag order if any
+      const currentOrderMap2 = buildOrderMapFromCurrent(root);
+      reorderExportRoot(exportRoot, currentOrderMap2);
       // Calculate tree layout for export
       const exportTree = d3.tree().nodeSize([dx, dy]);
       exportTree(exportRoot);
@@ -1065,24 +1674,29 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure2 = document.createElement('canvas').getContext('2d');
+      measure2.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound2 = Infinity, maxXBound2 = -Infinity, minYBound2 = Infinity, maxYBound2 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure2.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound2) minXBound2 = b.top;
+        if (b.bottom > maxXBound2) maxXBound2 = b.bottom;
+        if (b.left < minYBound2) minYBound2 = b.left;
+        if (b.right > maxYBound2) maxYBound2 = b.right;
+      }});
+      const basePadding2 = 40;
+      const outlineExtraPadding2 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding2 = basePadding2 + outlineExtraPadding2;
+      const treeWidth = Math.ceil((maxYBound2 - minYBound2) + padding2 * 2);
+      const treeHeight = Math.ceil((maxXBound2 - minXBound2) + padding2 * 2);
       
       // Create high-resolution canvas with white background
-      const scale = 3; // 3x resolution for crisp images
       const canvas = document.createElement('canvas');
-      canvas.width = treeWidth * scale;
-      canvas.height = treeHeight * scale;
+      canvas.width = treeWidth * exportScale;
+      canvas.height = treeHeight * exportScale;
       const ctx = canvas.getContext('2d');
       
       // Set white background
@@ -1091,13 +1705,14 @@ if uploaded_file:
       
       // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth)
-        .attr('height', treeHeight)
+        .attr('width', treeWidth * exportScale)
+        .attr('height', treeHeight * exportScale)
+        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`)
         .style('background', '#ffffff');
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound2 + padding2 }}, ${{ -minXBound2 + padding2 }})`);
       
       // Use the already calculated export tree
       const tempLinks = exportRoot.links();
@@ -1124,15 +1739,47 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')  // Position text above the node
-        .attr('x', 0)           // Center align horizontally
-        .attr('text-anchor', 'middle')  // Center align the text
-        .attr('font-family', 'Calibri, Arial, sans-serif')
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
+        .attr('font-family', fontFamily)
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
-        .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .attr('fill', fontColor)
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = exportRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        tempG.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Convert SVG to data URL and download
       const svgData = new XMLSerializer().serializeToString(tempSvg.node());
       const svgBlob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
@@ -1140,10 +1787,11 @@ if uploaded_file:
       
       const img = new Image();
       img.onload = function() {{
+        // Draw at native high-res size to avoid interpolation blur
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(function(blob) {{
           const link = document.createElement('a');
-          link.download = `decomposition_tree_transparent_${{new Date().toISOString().slice(0,10)}}.png`;
+          link.download = `decomposition_tree_white_bg_${{new Date().toISOString().slice(0,10)}}.png`;
           link.href = URL.createObjectURL(blob);
           link.click();
           URL.revokeObjectURL(url);
@@ -1160,6 +1808,9 @@ if uploaded_file:
         if (d._children) d.children = d._children;
       }});
       
+      // Reorder export tree to follow manual drag order if any
+      const currentOrderMap3 = buildOrderMapFromCurrent(root);
+      reorderExportRoot(exportRoot, currentOrderMap3);
       // Calculate tree layout for export
       const exportTree = d3.tree().nodeSize([dx, dy]);
       exportTree(exportRoot);
@@ -1167,18 +1818,24 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure3 = document.createElement('canvas').getContext('2d');
+      measure3.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound3 = Infinity, maxXBound3 = -Infinity, minYBound3 = Infinity, maxYBound3 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure3.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound3) minXBound3 = b.top;
+        if (b.bottom > maxXBound3) maxXBound3 = b.bottom;
+        if (b.left < minYBound3) minYBound3 = b.left;
+        if (b.right > maxYBound3) maxYBound3 = b.right;
+      }});
+      const basePadding3 = 40;
+      const outlineExtraPadding3 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding3 = basePadding3 + outlineExtraPadding3;
+      const treeWidth = Math.ceil((maxYBound3 - minYBound3) + padding3 * 2);
+      const treeHeight = Math.ceil((maxXBound3 - minXBound3) + padding3 * 2);
       
       // Create SVG with transparent background
       const svg = d3.create('svg')
@@ -1188,7 +1845,7 @@ if uploaded_file:
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound3 + padding3 }}, ${{ -minXBound3 + padding3 }})`);
       
       // Use the already calculated export tree
       const links = exportRoot.links();
@@ -1215,15 +1872,47 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')  // Position text above the node
-        .attr('x', 0)           // Center align horizontally
-        .attr('text-anchor', 'middle')  // Center align the text
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = exportRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        g.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
       const blob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
@@ -1235,6 +1924,12 @@ if uploaded_file:
       URL.revokeObjectURL(url);
     }}
     
+    // Wrapper to download both transparent and white background SVG (complete tree)
+    function downloadSVGAllComplete() {{
+      try {{ downloadSVG(); }} catch (e) {{ console.error(e); }}
+      setTimeout(() => {{ try {{ downloadSVGTransparent(); }} catch (e) {{ console.error(e); }} }}, 250);
+    }}
+    
     function downloadSVGTransparent() {{
       // Create a complete tree with all nodes expanded for export
       const exportRoot = d3.hierarchy(data);
@@ -1242,6 +1937,9 @@ if uploaded_file:
         if (d._children) d.children = d._children;
       }});
       
+      // Reorder export tree to follow manual drag order if any
+      const currentOrderMap4 = buildOrderMapFromCurrent(root);
+      reorderExportRoot(exportRoot, currentOrderMap4);
       // Calculate tree layout for export
       const exportTree = d3.tree().nodeSize([dx, dy]);
       exportTree(exportRoot);
@@ -1249,18 +1947,24 @@ if uploaded_file:
       const nodes = exportRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure4 = document.createElement('canvas').getContext('2d');
+      measure4.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound4 = Infinity, maxXBound4 = -Infinity, minYBound4 = Infinity, maxYBound4 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure4.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound4) minXBound4 = b.top;
+        if (b.bottom > maxXBound4) maxXBound4 = b.bottom;
+        if (b.left < minYBound4) minYBound4 = b.left;
+        if (b.right > maxYBound4) maxYBound4 = b.right;
+      }});
+      const basePadding4 = 40;
+      const outlineExtraPadding4 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding4 = basePadding4 + outlineExtraPadding4;
+      const treeWidth = Math.ceil((maxYBound4 - minYBound4) + padding4 * 2);
+      const treeHeight = Math.ceil((maxXBound4 - minXBound4) + padding4 * 2);
       
       // Create SVG with white background
       const svg = d3.create('svg')
@@ -1277,7 +1981,7 @@ if uploaded_file:
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound4 + padding4 }}, ${{ -minXBound4 + padding4 }})`);
       
       // Use the already calculated export tree
       const links = exportRoot.links();
@@ -1304,21 +2008,53 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')  // Position text above the node
-        .attr('x', 0)           // Center align horizontally
-        .attr('text-anchor', 'middle')  // Center align the text
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
         .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = exportRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        g.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
       const blob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `decomposition_tree_transparent_${{new Date().toISOString().slice(0,10)}}.svg`;
+      link.download = `decomposition_tree_white_bg_${{new Date().toISOString().slice(0,10)}}.svg`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -1336,24 +2072,29 @@ if uploaded_file:
       const nodes = currentRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure5 = document.createElement('canvas').getContext('2d');
+      measure5.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound5 = Infinity, maxXBound5 = -Infinity, minYBound5 = Infinity, maxYBound5 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure5.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound5) minXBound5 = b.top;
+        if (b.bottom > maxXBound5) maxXBound5 = b.bottom;
+        if (b.left < minYBound5) minYBound5 = b.left;
+        if (b.right > maxYBound5) maxYBound5 = b.right;
+      }});
+      const basePadding5 = 40;
+      const outlineExtraPadding5 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding5 = basePadding5 + outlineExtraPadding5;
+      const treeWidth = Math.ceil((maxYBound5 - minYBound5) + padding5 * 2);
+      const treeHeight = Math.ceil((maxXBound5 - minXBound5) + padding5 * 2);
       
       // Create high-resolution canvas
-      const scale = 3; // 3x resolution for crisp images
       const canvas = document.createElement('canvas');
-      canvas.width = treeWidth * scale;
-      canvas.height = treeHeight * scale;
+      canvas.width = treeWidth * exportScale;
+      canvas.height = treeHeight * exportScale;
       const ctx = canvas.getContext('2d');
       
       // Clear canvas (transparent background)
@@ -1361,12 +2102,13 @@ if uploaded_file:
       
       // Create temporary SVG for rendering
       const tempSvg = d3.create('svg')
-        .attr('width', treeWidth)
-        .attr('height', treeHeight);
+        .attr('width', treeWidth * exportScale)
+        .attr('height', treeHeight * exportScale)
+        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`);
       
       // Clone the tree structure
       const tempG = tempSvg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound5 + padding5 }}, ${{ -minXBound5 + padding5 }})`);
       
       // Use the current tree links
       const currentLinks = currentRoot.links();
@@ -1398,9 +2140,42 @@ if uploaded_file:
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
-        .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .attr('fill', fontColor)
+        .attr('font-style', fontStyle)
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = currentRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        tempG.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Convert SVG to data URL and download
       const svgData = new XMLSerializer().serializeToString(tempSvg.node());
       const svgBlob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
@@ -1408,6 +2183,7 @@ if uploaded_file:
       
       const img = new Image();
       img.onload = function() {{
+        // Draw at native high-res size to avoid interpolation blur
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         canvas.toBlob(function(blob) {{
           const link = document.createElement('a');
@@ -1421,6 +2197,126 @@ if uploaded_file:
       img.src = url;
     }}
     
+    // White background version of current view PNG
+    function downloadCurrentViewPNGWhite() {{
+      const currentRoot = root.copy();
+      const currentTree = d3.tree().nodeSize([dx, dy]);
+      currentTree(currentRoot);
+      const nodes = currentRoot.descendants();
+      if (nodes.length === 0) return;
+      const measure5 = document.createElement('canvas').getContext('2d');
+      measure5.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound5 = Infinity, maxXBound5 = -Infinity, minYBound5 = Infinity, maxYBound5 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure5.measureText(label).width;
+        const halfText = textWidth / 2;
+        const top = d.x - (nodeSize + fontSize + 8);
+        const bottom = d.x + (nodeSize + 8);
+        const left = d.y - Math.max(halfText, nodeSize);
+        const right = d.y + Math.max(halfText, nodeSize);
+        if (top < minXBound5) minXBound5 = top;
+        if (bottom > maxXBound5) maxXBound5 = bottom;
+        if (left < minYBound5) minYBound5 = left;
+        if (right > maxYBound5) maxYBound5 = right;
+      }});
+      const basePadding5 = 40;
+      const outlineExtraPadding5 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding5 = basePadding5 + outlineExtraPadding5;
+      const treeWidth = Math.ceil((maxYBound5 - minYBound5) + padding5 * 2);
+      const treeHeight = Math.ceil((maxXBound5 - minXBound5) + padding5 * 2);
+      const canvas = document.createElement('canvas');
+      canvas.width = treeWidth * exportScale;
+      canvas.height = treeHeight * exportScale;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const tempSvg = d3.create('svg')
+        .attr('width', treeWidth * exportScale)
+        .attr('height', treeHeight * exportScale)
+        .attr('viewBox', `0 0 ${{treeWidth}} ${{treeHeight}}`)
+        .style('background', '#ffffff');
+      const tempG = tempSvg.append('g')
+        .attr('transform', `translate(${{ -minYBound5 + padding5 }}, ${{ -minXBound5 + padding5 }})`);
+      const currentLinks = currentRoot.links();
+      tempG.selectAll('path')
+        .data(currentLinks)
+        .enter().append('path')
+        .attr('d', diagonal)
+        .attr('fill', 'none')
+        .attr('stroke', lineColor)
+        .attr('stroke-width', lineWidth)
+        .attr('stroke-opacity', lineOpacity);
+      const nodeGroups = tempG.selectAll('g')
+        .data(nodes)
+        .enter().append('g')
+        .attr('transform', d => `translate(${{d.y}}, ${{d.x}})`);
+      nodeGroups.each(function(d) {{ createNodeShape(d3.select(this), nodeSize); }});
+      nodeGroups.append('text')
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
+        .attr('font-family', 'Calibri, Arial, sans-serif')
+        .attr('font-size', fontSize + 'px')
+        .attr('font-weight', fontWeight)
+        .attr('fill', fontColor)
+        .attr('font-style', fontStyle)
+        .text(d => formatLabel(d));
+      // Region outlines if needed
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = currentRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        tempG.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+      const svgData = new XMLSerializer().serializeToString(tempSvg.node());
+      const svgBlob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
+      const url = URL.createObjectURL(svgBlob);
+      const img = new Image();
+      img.onload = function() {{
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(function(blob) {{
+          const link = document.createElement('a');
+          link.download = `decomposition_tree_current_view_white_bg_${{new Date().toISOString().slice(0,10)}}.png`;
+          link.href = URL.createObjectURL(blob);
+          link.click();
+          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(link.href);
+        }}, 'image/png', 1.0);
+      }};
+      img.src = url;
+    }}
+    
+    // Wrapper to download current view PNGs (transparent + white)
+    function downloadCurrentViewPNGAll() {{
+      try {{ downloadCurrentViewPNG(); }} catch (e) {{ console.error(e); }}
+      setTimeout(() => {{ try {{ downloadCurrentViewPNGWhite(); }} catch (e) {{ console.error(e); }} }}, 250);
+    }}
+    
     function downloadCurrentViewSVG() {{
       // Use the current tree state (with collapsed/expanded nodes as they are)
       const currentRoot = root.copy();
@@ -1432,18 +2328,24 @@ if uploaded_file:
       const nodes = currentRoot.descendants();
       if (nodes.length === 0) return;
       
-      // Calculate tree bounds with extra padding for text labels
-      const minX = d3.min(nodes, d => d.x);
-      const maxX = d3.max(nodes, d => d.x);
-      const minY = d3.min(nodes, d => d.y);
-      const maxY = d3.max(nodes, d => d.y);
-      
-      // Estimate text width for labels (approximate 15px per character + padding)
-      const maxTextLength = Math.max(...nodes.map(d => d.data.name.length));
-      const estimatedTextWidth = maxTextLength * 15 + 50; // 15px per char + 50px padding
-      
-      const treeWidth = maxY - minY + estimatedTextWidth + 400; // Extra padding for text
-      const treeHeight = maxX - minX + 400; // Increased padding
+      // Compute precise bounds including node shapes and labels
+      const measure6 = document.createElement('canvas').getContext('2d');
+      measure6.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound6 = Infinity, maxXBound6 = -Infinity, minYBound6 = Infinity, maxYBound6 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure6.measureText(label).width;
+        const b = getNodeBounds(d, textWidth);
+        if (b.top < minXBound6) minXBound6 = b.top;
+        if (b.bottom > maxXBound6) maxXBound6 = b.bottom;
+        if (b.left < minYBound6) minYBound6 = b.left;
+        if (b.right > maxYBound6) maxYBound6 = b.right;
+      }});
+      const basePadding6 = 40;
+      const outlineExtraPadding6 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding6 = basePadding6 + outlineExtraPadding6;
+      const treeWidth = Math.ceil((maxYBound6 - minYBound6) + padding6 * 2);
+      const treeHeight = Math.ceil((maxXBound6 - minXBound6) + padding6 * 2);
       
       // Create SVG with transparent background
       const svg = d3.create('svg')
@@ -1453,7 +2355,7 @@ if uploaded_file:
       
       // Clone the tree structure
       const g = svg.append('g')
-        .attr('transform', `translate(${{-minY + 200}}, ${{-minX + 200}})`);
+        .attr('transform', `translate(${{ -minYBound6 + padding6 }}, ${{ -minXBound6 + padding6 }})`);
       
       // Use the current tree links
       const links = currentRoot.links();
@@ -1479,15 +2381,48 @@ if uploaded_file:
       
       // Add text with clean styling and proper positioning
       nodeGroups.append('text')
-        .attr('dy', '-0.5em')  // Position text above the node
-        .attr('x', 0)           // Center align horizontally
-        .attr('text-anchor', 'middle')  // Center align the text
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
         .attr('font-family', 'Calibri, Arial, sans-serif')
         .attr('font-size', fontSize + 'px')
         .attr('font-weight', fontWeight)
-        .attr('fill', '#111')
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ''));
+        .attr('fill', fontColor)
+        .attr('font-style', fontStyle)
+        .text(d => formatLabel(d));
       
+      // Add region outlines for Mind Map exports
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = currentRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        g.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+
       // Download SVG
       const svgData = new XMLSerializer().serializeToString(svg.node());
       const blob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
@@ -1497,6 +2432,112 @@ if uploaded_file:
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
+    }}
+    
+    // White background version of current view SVG
+    function downloadCurrentViewSVGWhite() {{
+      const currentRoot = root.copy();
+      const currentTree = d3.tree().nodeSize([dx, dy]);
+      currentTree(currentRoot);
+      const nodes = currentRoot.descendants();
+      if (nodes.length === 0) return;
+      const measure6 = document.createElement('canvas').getContext('2d');
+      measure6.font = fontWeight + ' ' + fontSize + 'px Calibri, Arial, sans-serif';
+      let minXBound6 = Infinity, maxXBound6 = -Infinity, minYBound6 = Infinity, maxYBound6 = -Infinity;
+      nodes.forEach(d => {{
+        const label = formatLabel(d);
+        const textWidth = measure6.measureText(label).width;
+        const halfText = textWidth / 2;
+        const top = d.x - (nodeSize + fontSize + 8);
+        const bottom = d.x + (nodeSize + 8);
+        const left = d.y - Math.max(halfText, nodeSize);
+        const right = d.y + Math.max(halfText, nodeSize);
+        if (top < minXBound6) minXBound6 = top;
+        if (bottom > maxXBound6) maxXBound6 = bottom;
+        if (left < minYBound6) minYBound6 = left;
+        if (right > maxYBound6) maxYBound6 = right;
+      }});
+      const basePadding6 = 40;
+      const outlineExtraPadding6 = (styleMode === "Mind Map" && showGroupOutlines) ? Math.ceil(nodeSize * 3) : 0;
+      const padding6 = basePadding6 + outlineExtraPadding6;
+      const treeWidth = Math.ceil((maxYBound6 - minYBound6) + padding6 * 2);
+      const treeHeight = Math.ceil((maxXBound6 - minXBound6) + padding6 * 2);
+      const svg = d3.create('svg')
+        .attr('width', treeWidth)
+        .attr('height', treeHeight)
+        .attr('xmlns', 'http://www.w3.org/2000/svg')
+        .style('background', '#ffffff');
+      svg.append('rect').attr('width', '100%').attr('height', '100%').attr('fill', '#ffffff');
+      const g = svg.append('g')
+        .attr('transform', `translate(${{ -minYBound6 + padding6 }}, ${{ -minXBound6 + padding6 }})`);
+      const links = currentRoot.links();
+      g.selectAll('path')
+        .data(links)
+        .enter().append('path')
+        .attr('d', diagonal)
+        .attr('fill', 'none')
+        .attr('stroke', lineColor)
+        .attr('stroke-width', lineWidth)
+        .attr('stroke-opacity', lineOpacity);
+      const nodeGroups = g.selectAll('g')
+        .data(nodes)
+        .enter().append('g')
+        .attr('transform', d => `translate(${{d.y}}, ${{d.x}})`);
+      nodeGroups.each(function(d) {{ createNodeShape(d3.select(this), nodeSize); }});
+      nodeGroups.append('text')
+        .attr('dy', '-0.5em')
+        .attr('x', 0)
+        .attr('text-anchor', 'middle')
+        .attr('font-family', 'Calibri, Arial, sans-serif')
+        .attr('font-size', fontSize + 'px')
+        .attr('font-weight', fontWeight)
+        .attr('fill', fontColor)
+        .attr('font-style', fontStyle)
+        .text(d => formatLabel(d));
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = currentRoot.descendants().filter(n => ((n.data && typeof n.data.level === 'number') ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(gNode => {{
+          const desc = gNode.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: gNode.id || (gNode.id = Math.random()), x, y, width, height, stroke: gNode.data.color || '#94A3B8' }};
+        }});
+        g.append('g')
+          .selectAll('path')
+          .data(regions, d => d.key)
+          .enter().append('path')
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('fill', 'none')
+          .attr('stroke', d => d.stroke)
+          .attr('stroke-width', 2.5)
+          .attr('stroke-dasharray', '8 6')
+          .attr('opacity', outlineOpacity);
+      }}
+      const svgData = new XMLSerializer().serializeToString(svg.node());
+      const blob = new Blob([svgData], {{type: 'image/svg+xml;charset=utf-8'}});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = `decomposition_tree_current_view_white_bg_${{new Date().toISOString().slice(0,10)}}.svg`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+    }}
+
+    // Wrapper to download current view SVGs (transparent + white)
+    function downloadCurrentViewSVGAll() {{
+      try {{ downloadCurrentViewSVG(); }} catch (e) {{ console.error(e); }}
+      setTimeout(() => {{ try {{ downloadCurrentViewSVGWhite(); }} catch (e) {{ console.error(e); }} }}, 250);
     }}
     
     // Context menu functions
@@ -1688,17 +2729,60 @@ if uploaded_file:
       const nodes = root.descendants();
       const links = root.links();
       
-      // Update links
+      // Update links (color per-branch in Mind Map mode)
       const link = gLink.selectAll("path").data(links, d => d.target.id || (d.target.id = Math.random()));
       link.enter().append("path")
         .attr("class", "link")
         .attr("d", diagonal)
+        .attr("fill", "none")
         .attr("stroke-width", lineWidth)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round")
+        .attr("stroke", d => styleMode === "Mind Map" ? (d.target.data.color || lineColor) : lineColor)
         .merge(link)
         .transition().duration(750)
         .attr("d", diagonal)
-        .attr("stroke-width", lineWidth);
+        .attr("stroke-width", lineWidth)
+        .attr("stroke-linecap", "round")
+        .attr("stroke-linejoin", "round")
+        .attr("stroke", d => styleMode === "Mind Map" ? (d.target.data.color || lineColor) : lineColor);
       link.exit().remove();
+
+      // Region outlines for Mind Map style
+      if (styleMode === "Mind Map" && showGroupOutlines) {{
+        const groups = nodes.filter(n => (n.data && typeof n.data.level === 'number' ? n.data.level : n.depth) === groupOutlineLevel);
+        const padX = nodeSize * 2.5;
+        const padY = nodeSize * 2.0;
+        const regions = groups.map(g => {{
+          const desc = g.descendants();
+          let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+          desc.forEach(d => {{
+            if (d.x < minX) minX = d.x;
+            if (d.x > maxX) maxX = d.x;
+            if (d.y < minY) minY = d.y;
+            if (d.y > maxY) maxY = d.y;
+          }});
+          const x = minY - padX;
+          const y = minX - padY;
+          const width = (maxY - minY) + padX * 2;
+          const height = (maxX - minX) + padY * 2;
+          return {{ key: g.id || (g.id = Math.random()), x, y, width, height, stroke: g.data.color || '#94A3B8' }};
+        }});
+        const regionSel = gRegion.selectAll('path').data(regions, d => d.key);
+        regionSel.enter().append('path')
+          .attr('class', 'region-outline')
+          .attr('opacity', outlineOpacity)
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('stroke', d => d.stroke)
+          .merge(regionSel)
+          .transition().duration(600)
+          .attr('d', d => roundedRectPath(d.x, d.y, d.width, d.height, 18))
+          .attr('stroke', d => d.stroke)
+          .attr('opacity', outlineOpacity);
+        regionSel.exit().remove();
+      }} else {{
+        gRegion.selectAll('*').remove();
+      }}
       
       // Update nodes
       const node = gNode.selectAll("g").data(nodes, d => d.id || (d.id = Math.random()));
@@ -1708,6 +2792,8 @@ if uploaded_file:
         .attr("class", "node")
         .attr("transform", d => `translate(${{source.y0 || 0}},${{source.x0 || 0}})`)
         .on("click", (event, d) => {{
+          // Ignore click if a drag just occurred
+          if (dragActive || event.defaultPrevented) return;
           if (d._children) {{
             d.children = d.children ? null : d._children;
           }}
@@ -1732,20 +2818,75 @@ if uploaded_file:
       
       // Add text to new nodes with clean styling and proper positioning
       nodeEnter.append("text")
-        .attr("dy", "-0.5em")  // Position text above the node
-        .attr("x", 0)           // Center align horizontally
-        .attr("text-anchor", "middle")  // Center align the text
+        .attr('x', getLabelAttrs().x)
+        .attr('y', getLabelAttrs().y)
+        .attr('text-anchor', getLabelAttrs().anchor)
         .attr("font-family", "Calibri, Arial, sans-serif")
         .attr("font-size", fontSize + "px")
         .attr("font-weight", fontWeight)
-        .attr("fill", "#111")
-        .attr("pointer-events", "none")  // Prevent text from interfering with node clicks
-        .text(d => d.data.name + (d.data.value ? ` (${{d.data.value}}, ${{d.data.percentage}}%)` : ""));
+        .attr("fill", fontColor)
+        .attr("font-style", fontStyle)
+        .text(d => formatLabel(d));
       
+      // Drag & drop reorder among siblings
+      const dragBehavior = d3.drag()
+        .on("start", function(event, d) {{
+          if (!enableDragReorder) return;
+          // Prevent zoom/pan from interfering while dragging
+          if (event.sourceEvent) {{ event.sourceEvent.stopPropagation(); }}
+          dragActive = true;
+          d3.select(this).raise().classed("dragging", true);
+        }})
+        .on("drag", function(event, d) {{
+          if (!enableDragReorder) return;
+          const [, py] = d3.pointer(event, g.node());
+          d3.select(this).attr("transform", `translate(${{d.y}}, ${{py}})`);
+        }})
+        .on("end", function(event, d) {{
+          if (!enableDragReorder) return;
+          // Mark the preceding click as prevented so it won't toggle
+          event.sourceEvent && (event.sourceEvent.preventDefault(), event.sourceEvent.stopPropagation());
+          dragActive = false;
+          d3.select(this).classed("dragging", false);
+          const parent = d.parent;
+          if (!parent) return;
+          manualOrder = true;
+          const container = parent.children ? parent.children : parent._children;
+          if (!container) return;
+          const siblings = container.filter(s => s !== d).sort((a, b) => a.x - b.x);
+          const [, py] = d3.pointer(event, g.node());
+          // Find index to insert based on vertical position relative to siblings
+          let dropIndex = siblings.findIndex(s => py < s.x);
+          if (dropIndex === -1) dropIndex = siblings.length;
+          // Build a new ordered array: insert dragged node at dropIndex among sorted siblings
+          const newOrder = [];
+          for (let i = 0; i < siblings.length; i++) {{
+            if (i === dropIndex) newOrder.push(d);
+            newOrder.push(siblings[i]);
+          }}
+          if (dropIndex === siblings.length) newOrder.push(d);
+          if (parent.children) {{ parent.children = newOrder; }} else {{ parent._children = newOrder; }}
+          update(parent);
+        }});
+
+      if (enableDragReorder) {{
+        nodeEnter.call(dragBehavior);
+      }}
+
       // Update existing nodes
-      node.merge(nodeEnter)
+      const nodeUpdate = node.merge(nodeEnter)
+        .attr("pointer-events", "all");
+
+      nodeUpdate
         .transition().duration(700)
         .attr("transform", d => `translate(${{d.y}},${{d.x}})`);
+      
+      if (enableDragReorder) {{
+        nodeUpdate.call(dragBehavior);
+      }}
+      if (enableDragReorder) {{
+        node.merge(nodeEnter).call(dragBehavior);
+      }}
       
       // Remove old nodes
       node.exit().remove();
@@ -1777,7 +2918,6 @@ if uploaded_file:
     </html>
     """
     st.header("🎯 Interactive Decomposition Tree")
-    st.markdown(f"*Node color ({time_comparison}): 🔵 Early, 🟢 On-Time, 🔴 Delayed, ⚪ Pending*")
     st.info("💡 **Right-click on any node** to download data, view details, or export the subtree structure!")
     
     # Add export explanation
@@ -1798,25 +2938,7 @@ if uploaded_file:
         **Recommendation:** Use "Complete Tree" for official reports and "Current View" for focused presentations.
         """)
     
-    # Show status distribution for verification
-    if time_comparison == "Week (Monday start)" and 'Week_Status' in df.columns:
-        st.sidebar.write("**Week Status Distribution:**")
-        week_status_counts = df['Week_Status'].value_counts()
-        for status, count in week_status_counts.items():
-            st.sidebar.write(f"• {status}: {count}")
-        # Debug: Show sample data
-        st.sidebar.write("**Sample Week Data:**")
-        sample_data = df[['Planned_Week_Label', 'Actual_Week_Label', 'Week_Status']].head(5)
-        st.sidebar.write(sample_data)
-    elif time_comparison == "Month" and 'Month_Status' in df.columns:
-        st.sidebar.write("**Month Status Distribution:**")
-        month_status_counts = df['Month_Status'].value_counts()
-        for status, count in month_status_counts.items():
-            st.sidebar.write(f"• {status}: {count}")
-        # Debug: Show sample data
-        st.sidebar.write("**Sample Month Data:**")
-        sample_data = df[['Planned_Month_Label', 'Actual_Month_Label', 'Month_Status']].head(5)
-        st.sidebar.write(sample_data)
+    # Status distribution and samples removed
     st.components.v1.html(d3_html, height=900)
     csv = df.to_csv(index=False)
     st.sidebar.download_button("📥 Download All Data CSV", csv, "all_sites.csv", "text/csv")
